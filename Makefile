@@ -12,11 +12,7 @@ export:
 		--exclude-decisions "Withdrawn,Desk Reject,Invite to Workshop"
 
 # Enrich with LLM-classified primary areas (requires TOGETHER_API_KEY)
-enrich:
-	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.enrich_primary_area \
-		--in-path outputs/review_subset.jsonl \
-		--out-path outputs/review_subset_enriched.jsonl \
-		--model "mistralai/Mixtral-8x7B-Instruct-v0.1"
+
 
 # Run review simulation pipeline
 run:

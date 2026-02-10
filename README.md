@@ -7,10 +7,9 @@ Research prototype for benchmarking LLM-based peer review simulations. Enables a
 ## Key Capabilities
 
 - **Data Ingestion**: Export clean subsets from SQLite with year filtering, min-length validation, deterministic sampling
-- **LLM Enrichment**: Classify papers by research area using Together AI / cloud LLMs
 - **Review Generation**: Generate synthetic reviews using mock, local Llama models (GGUF), or cloud APIs
 - **Automated Benchmarking**: Run large-scale experiments comparing multiple models (Llama 3, Mistral, Qwen)
-- **Evaluation**: Compare generated vs human reviews using TF-IDF cosine, Jaccard similarity, and score difference MAE
+- **Evaluation**: Compare generated vs human reviews using score difference MAE (primary) and text similarity metrics (secondary)
 
 ---
 
@@ -21,8 +20,7 @@ LLM-Reviewer/
 ├── data/
 │   ├── gen_review.db                    # Source database (~1.5GB)
 │   └── processed/
-│       ├── review_subset.jsonl          # Clean export (200 papers, 2021+)
-│       └── review_subset_enriched.jsonl # + LLM-classified primary_area
+│       ├── review_subset.jsonl          # Clean export (200 papers, 2023)
 ├── outputs/                             # Generated results (not committed)
 ├── scripts/
 │   ├── compare_models.py                # Multi-model comparison table generator
@@ -33,7 +31,6 @@ LLM-Reviewer/
 │   ├── run.py                           # Pipeline entry point
 │   ├── ingest/
 │   │   ├── export_review_subset.py      # SQLite → JSONL exporter
-│   │   ├── enrich_primary_area.py       # LLM classification enrichment
 │   │   └── load_jsonl.py                # JSONL loader utility
 │   ├── generate/
 │   │   └── providers.py                 # Mock + LlamaCpp + Together generators
@@ -69,7 +66,7 @@ CMAKE_ARGS="-DLLAMA_METAL=on" FORCE_CMAKE=1 pip install llama-cpp-python
 ## Data Pipeline
 
 ### 1. Export from SQLite
-Export a clean subset of papers with reviews:
+Export a clean subset of papers with reviews (defaults to **2023** slice):
 
 ```bash
 make export
@@ -80,7 +77,7 @@ Or with custom options:
 PYTHONPATH=src python -m reviewer_sim.ingest.export_review_subset \
   --db-path data/gen_review.db \
   --out-path data/processed/review_subset.jsonl \
-  --n 200 --seed 42 --min-year 2021 --min-review-chars 50
+  --n 200 --seed 42 --year 2023 --min-review-chars 50
 ```
 
 **Output schema:**
@@ -90,62 +87,17 @@ PYTHONPATH=src python -m reviewer_sim.ingest.export_review_subset \
   "title": "Paper Title",
   "abstract": "...",
   "primary_area": "general",
-  "year": 2022,
+  "year": 2023,
   "review": {"main_review": "..."},
   "meta": {
     "source": "gen_review_sqlite",
-    "filters": {"min_year": 2021, "min_review_chars": 50},
+    "filters": {"year": 2023, "min_review_chars": 50},
     "exported_at": "2024-01-01T00:00:00+00:00"
   }
 }
 ```
 
-### 2. Enrich with LLM Classification
-Classify papers by research area using Together AI:
 
-```bash
-export TOGETHER_API_KEY="your-key"
-make enrich
-```
-
-Or with custom options:
-```bash
-PYTHONPATH=src python -m reviewer_sim.ingest.enrich_primary_area \
-  --in-path data/processed/review_subset.jsonl \
-  --out-path data/processed/review_subset_enriched.jsonl \
-  --model "mistralai/Mixtral-8x7B-Instruct-v0.1" \
-  --max-concurrency 8
-```
-
-**Added fields:**
-```json
-{
-  "primary_area_llm": "ml",
-  "primary_area_llm_confidence": 0.9,
-  "meta": {
-    "llm_labeling": {
-      "provider": "together",
-      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
-      "prompt_version": "area-v1",
-      "temperature": 0,
-      "timestamp_utc": "..."
-    }
-  }
-}
-```
-
-**Label distribution (200 papers):**
-| Label | Count | % |
-|-------|-------|---|
-| ml | 128 | 64% |
-| computer_vision | 25 | 12.5% |
-| nlp | 23 | 11.5% |
-| theory | 9 | 4.5% |
-| robotics | 7 | 3.5% |
-| bio_medical | 3 | 1.5% |
-| graphics | 2 | 1% |
-| other | 2 | 1% |
-| multi_modal | 1 | 0.5% |
 
 ---
 
@@ -207,11 +159,13 @@ python -m reviewer_sim.run
 
 ## Evaluation Metrics
 
-| Metric | Description | Range |
-|--------|-------------|-------|
-| `tfidf_cosine` | Cosine similarity of TF-IDF vectors | 0-1 (higher = more similar) |
-| `keyword_jaccard` | Jaccard index of token sets | 0-1 (higher = more overlap) |
-| `score_abs_diff` | Absolute difference between ratings | 0+ (lower = better) |
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mae` | Primary | Mean Absolute Error across 5 scoring dimensions (lower is better) |
+| `coverage_pct` | Primary | Percentage of examples successfully evaluated |
+| `decision_agree` | Primary | Agreement on Accept/Reject decision |
+| `tfidf_cosine` | Secondary | Cosine similarity of TF-IDF vectors (higher = more similar) |
+| `keyword_jaccard` | Secondary | Jaccard index of token sets (higher = more overlap) |
 
 ### Summarize Results
 ```bash
@@ -224,8 +178,7 @@ make summarize OUTPUT_JSONL=outputs/results.jsonl
 
 | Target | Description |
 |--------|-------------|
-| `make export` | Export 200 papers from SQLite (2021+) |
-| `make enrich` | Enrich with LLM-classified primary areas |
+| `make export` | Export 200 papers from SQLite (2023 slice) |
 | `make run` | Run review simulation pipeline |
 | `make run-mock` | Run with mock generator |
 | `make run-llamacpp` | Run with GGUF model (requires `MODEL_PATH`) |
@@ -244,7 +197,7 @@ make summarize OUTPUT_JSONL=outputs/results.jsonl
 | Papers with non-empty reviews | 9,766 |
 | GenAI Reviews | 81,850 |
 
-**Processed subset:** 200 papers from 2021+ with reviews ≥50 chars
+**Processed subset:** 200 papers from **2023** with reviews ≥50 chars
 
 ---
 
@@ -295,16 +248,14 @@ docker run -v $(pwd)/models:/app/models \
 
 ---
 
-## Experimental Results
+## Benchmarks (2023 Subset)
 
-### Mock vs LlamaCpp (Llama 3 8B Q4_K_M)
+| Model | MAE (lower is better) | Coverage | Decision Agreement |
+|-------|-----------------------|----------|--------------------|
+| **Mock** | 0.709 | 100% | 61.0% |
+| *Llama-3-8B (TBD)* | ... | ... | ... |
 
-| Metric | Mock | LlamaCpp |
-|--------|------|----------|
-| tfidf_cosine (mean) | 0.136 | **0.155** |
-| keyword_jaccard (mean) | 0.087 | 0.080 |
-
-LLM reviews show ~14% higher semantic similarity to human reviews.
+*Note: Benchmarks now prioritize Mean Absolute Error (MAE) and Decision Agreement over text similarity.*
 
 ---
 
