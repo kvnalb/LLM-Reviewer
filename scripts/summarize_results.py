@@ -57,7 +57,12 @@ def main() -> None:
             if da:
                 agree_count += 1
 
-    print(f"Total rows: {total}\n")
+    print(f"Total rows: {total}")
+    print(f"Processed:  {len(all_mae)}")
+    if total > 0:
+        coverage = len(all_mae) / total * 100
+        print(f"Coverage:   {coverage:.1f}%")
+    print()
 
     print("Per-dimension MAE:")
     for dim in SCORE_DIMENSIONS:

@@ -80,6 +80,8 @@ def compute_summary(path: Path) -> dict:
 
     return {
         "n": len(rows),
+        "n_processed": len(all_mae),
+        "coverage_pct": (len(all_mae) / len(rows) * 100) if rows else 0.0,
         "mae_mean": mean(all_mae) if all_mae else None,
         "mae_median": sorted(all_mae)[len(all_mae) // 2] if all_mae else None,
         "decision_agree_pct": (
@@ -106,7 +108,7 @@ def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
 
     header_dims = "  ".join(f"{DIM_SHORT[d]:>7s}" for d in SCORE_DIMENSIONS)
     header = (
-        f"{'Rank':>4s}  {'Model':<28s}  {'MAE':>6s}  {'DecAgr':>7s}  "
+        f"{'Rank':>4s}  {'Model':<28s}  {'MAE':>6s}  {'Cov%':>5s}  {'DecAgr':>7s}  "
         f"{header_dims}  {'N':>4s}"
     )
     sep = "-" * len(header)
@@ -123,6 +125,7 @@ def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
             if summary["mae_mean"] is not None
             else "n/a"
         )
+        cov_str = f"{summary['coverage_pct']:.0f}%"
         if summary["decision_agree_pct"] is not None:
             agree_str = f"{summary['decision_agree_pct']:.1f}%"
         else:
@@ -135,7 +138,7 @@ def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
         dim_cols = "  ".join(f"{s:>7s}" for s in dim_strs)
 
         print(
-            f"{rank:>4d}  {label:<28s}  {mae_str:>6s}  {agree_str:>7s}  "
+            f"{rank:>4d}  {label:<28s}  {mae_str:>6s}  {cov_str:>5s}  {agree_str:>7s}  "
             f"{dim_cols}  {summary['n']:>4d}"
         )
 

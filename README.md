@@ -1,6 +1,6 @@
 # LLM-Reviewer
 
-Research prototype for LLM-based peer review simulation. Enables comparison between human reviews and AI-generated reviews using local GGUF models or cloud APIs.
+Research prototype for benchmarking LLM-based peer review simulations. Enables automated comparison between human reviews and AI-generated reviews using disparate model providers (Mock, Local GGUF, Together AI).
 
 ---
 
@@ -8,8 +8,9 @@ Research prototype for LLM-based peer review simulation. Enables comparison betw
 
 - **Data Ingestion**: Export clean subsets from SQLite with year filtering, min-length validation, deterministic sampling
 - **LLM Enrichment**: Classify papers by research area using Together AI / cloud LLMs
-- **Review Generation**: Generate synthetic reviews using mock or local Llama models (GGUF + Metal)
-- **Evaluation**: Compare generated vs human reviews using TF-IDF cosine, Jaccard similarity, score diff
+- **Review Generation**: Generate synthetic reviews using mock, local Llama models (GGUF), or cloud APIs
+- **Automated Benchmarking**: Run large-scale experiments comparing multiple models (Llama 3, Mistral, Qwen)
+- **Evaluation**: Compare generated vs human reviews using TF-IDF cosine, Jaccard similarity, and score difference MAE
 
 ---
 
@@ -18,15 +19,15 @@ Research prototype for LLM-based peer review simulation. Enables comparison betw
 ```
 LLM-Reviewer/
 ├── data/
-│   ├── gen_review.db                    # Source database (~1.5GB, not committed)
+│   ├── gen_review.db                    # Source database (~1.5GB)
 │   └── processed/
 │       ├── review_subset.jsonl          # Clean export (200 papers, 2021+)
 │       └── review_subset_enriched.jsonl # + LLM-classified primary_area
-├── models/
-│   └── *.gguf                           # GGUF models (not committed)
 ├── outputs/                             # Generated results (not committed)
 ├── scripts/
-│   └── summarize_results.py             # Results summary tool
+│   ├── compare_models.py                # Multi-model comparison table generator
+│   ├── run_experiment.py                # Batch experiment runner (Together AI)
+│   └── summarize_results.py             # Single result summary tool
 ├── src/reviewer_sim/
 │   ├── __init__.py
 │   ├── run.py                           # Pipeline entry point
@@ -35,7 +36,7 @@ LLM-Reviewer/
 │   │   ├── enrich_primary_area.py       # LLM classification enrichment
 │   │   └── load_jsonl.py                # JSONL loader utility
 │   ├── generate/
-│   │   └── providers.py                 # Mock + LlamaCpp generators
+│   │   └── providers.py                 # Mock + LlamaCpp + Together generators
 │   ├── evaluate/
 │   │   └── metrics.py                   # Evaluation metrics
 │   └── utils/
@@ -148,9 +149,9 @@ PYTHONPATH=src python -m reviewer_sim.ingest.enrich_primary_area \
 
 ---
 
-## Review Generation
+## Review Generation & Experimentation
 
-### Run with Mock Generator
+### Run with Mock Generator (Fast Test)
 ```bash
 make run-mock
 ```
