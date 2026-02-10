@@ -4,12 +4,21 @@ from pathlib import Path
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a scientific peer reviewer. Given a paper's title, abstract, and "
-    "reviewer profile, write a concise, constructive review. Return ONLY valid "
-    'JSON with these keys: "text" (the review), "rating" (int 1-10), '
-    '"confidence" (int 1-5), "correctness" (int 1-4), '
-    '"technical_novelty_and_significance" (int 1-4), '
-    '"empirical_novelty_and_significance" (int 1-4). No markdown, no extra text.'
+    "You are an ICLR peer reviewer. Given a paper's title and abstract, "
+    "predict the review scores. Return ONLY a valid JSON object with these keys:\n"
+    '  "rating": int 1-10 '
+    "(1: strong reject, 3: clear reject, 5: borderline reject, "
+    "6: weak accept, 8: top 50% of accepted, 10: top 5%),\n"
+    '  "confidence": int 1-5 '
+    "(1: educated guess, 3: fairly confident, 5: absolutely certain),\n"
+    '  "correctness": int 1-4 '
+    "(1: major errors, 2: several errors, 3: minor issues, 4: correct),\n"
+    '  "technical_novelty_and_significance": int 1-4 '
+    "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
+    '  "empirical_novelty_and_significance": int 1-4 '
+    "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
+    '  "rationale": 1-2 sentence justification for the scores.\n'
+    "No markdown, no extra text. JSON only."
 )
 
 
@@ -29,7 +38,7 @@ def load_model_config() -> ModelConfig:
     provider = os.environ.get("MODEL_PROVIDER", "mock").lower()
     model_path = os.environ.get("MODEL_PATH")
     temperature = float(os.environ.get("TEMPERATURE", "0.2"))
-    max_tokens = int(os.environ.get("MAX_TOKENS", "600"))
+    max_tokens = int(os.environ.get("MAX_TOKENS", "200"))
     top_p = float(os.environ.get("TOP_P", "0.95"))
     n_ctx = int(os.environ.get("N_CTX", "4096"))
     n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", "-1"))

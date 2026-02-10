@@ -10,13 +10,9 @@ from pathlib import Path
 from statistics import mean, median
 from typing import List
 
-SCORE_DIMENSIONS = [
-    "rating",
-    "confidence",
-    "correctness",
-    "technical_novelty_and_significance",
-    "empirical_novelty_and_significance",
-]
+from reviewer_sim.ingest.export_review_subset import SCORE_COLUMNS
+
+SCORE_DIMENSIONS = SCORE_COLUMNS
 
 
 def _read_jsonl(path: Path) -> List[dict]:

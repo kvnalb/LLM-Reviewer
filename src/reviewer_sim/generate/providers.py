@@ -14,7 +14,7 @@ SCORE_DIMENSIONS = SCORE_COLUMNS
 
 class BaseGenerator(Protocol):
     def generate(self, example: Dict) -> Dict:
-        """Return a dict with 'text' and the five SCORE_DIMENSIONS keys."""
+        """Return a dict with the five SCORE_DIMENSIONS keys and optional 'rationale'."""
         ...
 
 
@@ -125,10 +125,6 @@ class LlamaCppGenerator:
     def _build_prompt(self, example: Dict) -> str:
         title = example.get("title", "Untitled")
         abstract = example.get("abstract", "") or ""
-        profile = example.get("reviewer_profile", {}) or {}
-        expertise = profile.get("expertise", "general")
-        seniority = profile.get("seniority", "unknown")
-        tone = profile.get("tone", "neutral")
 
         prompt = f"""{self.config.system_prompt}
 
@@ -136,19 +132,7 @@ Title: {title}
 
 Abstract: {abstract}
 
-Reviewer profile:
-- Expertise: {expertise}
-- Seniority: {seniority}
-- Tone: {tone}
-
-Respond with ONLY a JSON object containing these keys:
-  "text": "<your review>",
-  "rating": <int 1-10>,
-  "confidence": <int 1-5>,
-  "correctness": <int 1-4>,
-  "technical_novelty_and_significance": <int 1-4>,
-  "empirical_novelty_and_significance": <int 1-4>
-"""
+Predict the review scores as JSON."""
         return prompt
 
     def _parse_json_response(self, content: str) -> Dict:
@@ -164,29 +148,39 @@ Respond with ONLY a JSON object containing these keys:
         return result
 
     @staticmethod
+    def _is_score_dict(data: object) -> bool:
+        """Check if data is a dict containing at least one expected score key."""
+        if not isinstance(data, dict):
+            return False
+        expected = {*SCORE_DIMENSIONS, "text", "rationale"}
+        return bool(expected & data.keys())
+
+    @staticmethod
     def _try_parse_json(content: str) -> Dict | None:
         try:
             data = json.loads(content)
-            if isinstance(data, dict) and "text" in data:
+            if LlamaCppGenerator._is_score_dict(data):
                 return data
         except json.JSONDecodeError:
             pass
 
-        json_match = re.search(r'\{[^{}]*"text"[^{}]*\}', content, re.DOTALL)
+        # Try to find a JSON object containing "rating" (most reliable key)
+        json_match = re.search(r'\{[^{}]*"rating"[^{}]*\}', content, re.DOTALL)
         if json_match:
             try:
                 data = json.loads(json_match.group())
-                if isinstance(data, dict) and "text" in data:
+                if LlamaCppGenerator._is_score_dict(data):
                     return data
             except json.JSONDecodeError:
                 pass
 
+        # Fallback: extract outermost braces
         start = content.find("{")
         end = content.rfind("}")
         if start != -1 and end != -1 and end > start:
             try:
                 data = json.loads(content[start : end + 1])
-                if isinstance(data, dict) and "text" in data:
+                if LlamaCppGenerator._is_score_dict(data):
                     return data
             except json.JSONDecodeError:
                 pass
@@ -204,6 +198,11 @@ Respond with ONLY a JSON object containing these keys:
                     data[dim] = None
             else:
                 data[dim] = None
+        # Normalise: accept both "rationale" and "text" for the free-text field
+        if "rationale" in data and "text" not in data:
+            data["text"] = data["rationale"]
+        if "text" not in data:
+            data["text"] = ""
         return data
 
     def generate(self, example: Dict) -> Dict:
@@ -254,7 +253,7 @@ class TogetherGenerator:
         user_content = (
             f"Title: {title}\n\n"
             f"Abstract: {abstract[:3000]}\n\n"
-            "Write your review and return ONLY a JSON object."
+            "Predict the review scores as JSON."
         )
         return [
             {"role": "system", "content": self.config.system_prompt},
