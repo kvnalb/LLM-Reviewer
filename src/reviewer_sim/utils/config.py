@@ -3,7 +3,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_SYSTEM_PROMPT = """You are a scientific peer reviewer. Given a paper's title, abstract, and reviewer profile, write a concise, constructive review. Return ONLY valid JSON with exactly two keys: "text" (the review) and "score" (integer 1-10). No markdown, no extra text."""
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a scientific peer reviewer. Given a paper's title, abstract, and "
+    "reviewer profile, write a concise, constructive review. Return ONLY valid "
+    'JSON with these keys: "text" (the review), "rating" (int 1-10), '
+    '"confidence" (int 1-5), "correctness" (int 1-4), '
+    '"technical_novelty_and_significance" (int 1-4), '
+    '"empirical_novelty_and_significance" (int 1-4). No markdown, no extra text.'
+)
 
 
 @dataclass

@@ -1,8 +1,22 @@
+"""Summarise reviewer_sim results JSONL (numerical eval metrics).
+
+Usage:
+    python scripts/summarize_results.py outputs/results.jsonl
+"""
+
 import argparse
 import json
 from pathlib import Path
 from statistics import mean, median
-from typing import List, Tuple
+from typing import List
+
+SCORE_DIMENSIONS = [
+    "rating",
+    "confidence",
+    "correctness",
+    "technical_novelty_and_significance",
+    "empirical_novelty_and_significance",
+]
 
 
 def _read_jsonl(path: Path) -> List[dict]:
@@ -15,57 +29,58 @@ def _read_jsonl(path: Path) -> List[dict]:
     return rows
 
 
-def _fmt_stats(values: List[float]) -> str:
-    if not values:
-        return "mean=n/a median=n/a"
-    return f"mean={mean(values):.4f} median={median(values):.4f}"
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Summarize reviewer_sim results JSONL.")
+    parser = argparse.ArgumentParser(description="Summarise reviewer_sim results JSONL.")
     parser.add_argument("path", type=Path, help="Path to results JSONL")
     args = parser.parse_args()
 
     rows = _read_jsonl(args.path)
-    tfidf_vals: List[float] = []
-    jaccard_vals: List[float] = []
-    score_diff_non_null = 0
-    total = 0
-    scored_examples: List[Tuple[float, str]] = []
+    total = len(rows)
+
+    # Collect per-dimension errors
+    dim_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
+    all_mae: list[float] = []
+    agree_count = 0
+    agree_total = 0
 
     for row in rows:
-        total += 1
-        metrics = row.get("metrics", {}) or {}
-        tfidf = metrics.get("tfidf_cosine", 0.0)
-        jaccard = metrics.get("keyword_jaccard", 0.0)
-        score_diff = metrics.get("score_abs_diff", None)
-        paper_id = row.get("paper_id", "unknown")
+        m = row.get("metrics", {}) or {}
 
-        if tfidf is not None:
-            tfidf_vals.append(float(tfidf))
-            scored_examples.append((float(tfidf), str(paper_id)))
-        if jaccard is not None:
-            jaccard_vals.append(float(jaccard))
-        if score_diff is not None:
-            score_diff_non_null += 1
+        for dim in SCORE_DIMENSIONS:
+            val = m.get(f"{dim}_abs_err")
+            if val is not None:
+                dim_errors[dim].append(float(val))
 
-    percent_non_null = (score_diff_non_null / total * 100) if total else 0.0
+        mae = m.get("mae")
+        if mae is not None:
+            all_mae.append(float(mae))
 
-    print("tfidf_cosine:", _fmt_stats(tfidf_vals))
-    print("keyword_jaccard:", _fmt_stats(jaccard_vals))
-    print(f"score_abs_diff non-null: {percent_non_null:.2f}% ({score_diff_non_null}/{total})")
+        da = m.get("decision_agree")
+        if da is not None:
+            agree_total += 1
+            if da:
+                agree_count += 1
 
-    scored_examples.sort(key=lambda x: x[0])
-    bottom = scored_examples[:3]
-    top = scored_examples[-3:][::-1]
+    print(f"Total rows: {total}\n")
 
-    print("top_3_tfidf_cosine:")
-    for score, pid in top:
-        print(f"{pid}\t{score:.4f}")
+    print("Per-dimension MAE:")
+    for dim in SCORE_DIMENSIONS:
+        vals = dim_errors[dim]
+        if vals:
+            print(f"  {dim:45s}  mean={mean(vals):.3f}  median={median(vals):.3f}  n={len(vals)}")
+        else:
+            print(f"  {dim:45s}  n/a")
 
-    print("bottom_3_tfidf_cosine:")
-    for score, pid in bottom:
-        print(f"{pid}\t{score:.4f}")
+    if all_mae:
+        print(f"\nOverall MAE:  mean={mean(all_mae):.3f}  median={median(all_mae):.3f}  n={len(all_mae)}")
+    else:
+        print("\nOverall MAE:  n/a")
+
+    if agree_total:
+        pct = agree_count / agree_total * 100
+        print(f"Decision agreement: {pct:.1f}%  ({agree_count}/{agree_total})")
+    else:
+        print("Decision agreement: n/a")
 
 
 if __name__ == "__main__":

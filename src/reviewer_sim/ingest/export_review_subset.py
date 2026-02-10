@@ -8,13 +8,23 @@ Example usage:
         --n 200 \\
         --seed 42 \\
         --min-year 2021 \\
-        --min-review-chars 50
+        --min-review-chars 50 \\
+        --year 2023 \\
+        --exclude-decisions "Withdrawn,Desk Reject,Invite to Workshop"
 
 Filters applied:
-    - Only papers with non-empty main_review
+    - Only papers with non-empty review text (main_review, falling back to
+      summary_of_the_review for 2023+ where main_review is empty)
     - Only papers from >= min-year (based on when_submitted or detected year column)
+    - Optionally only papers from exact --year
+    - Optionally exclude specific decision values
     - Only reviews with >= min-review-chars after whitespace normalization
     - Drops rows with missing paper_id
+
+Column semantics (ICLR OpenReview):
+    - main_review:             full review text (populated for <=2022)
+    - summary:                 reviewer's summary OF the paper (not a review)
+    - summary_of_the_review:   short review by the human reviewer (populated for 2023+)
 
 Output schema per line:
     {
@@ -23,10 +33,19 @@ Output schema per line:
         "abstract": "<str>",
         "primary_area": "<str>",
         "year": <int or null>,
-        "review": {"main_review": "<str>"},
+        "decision": "<str or null>",
+        "review": {
+            "main_review": "<str>",
+            "paper_summary": "<str or null>",
+            "rating": {"raw": "<str>", "value": <float or null>},
+            "confidence": {"raw": "<str>", "value": <float or null>},
+            "correctness": {"raw": "<str>", "value": <float or null>},
+            "technical_novelty_and_significance": {"raw": "<str>", "value": <float or null>},
+            "empirical_novelty_and_significance": {"raw": "<str>", "value": <float or null>}
+        },
         "meta": {
             "source": "gen_review_sqlite",
-            "filters": {"min_year": ..., "min_review_chars": ...},
+            "filters": {...},
             "exported_at": "<ISO8601>"
         }
     }
@@ -54,11 +73,22 @@ YEAR_COLUMN_PRIORITY = [
     ("decision_date", "timestamp"),
 ]
 
+# Numerical review columns to export alongside review text.
+# Canonical list — metrics.py and providers.py import from here.
+SCORE_COLUMNS = [
+    "rating",
+    "confidence",
+    "correctness",
+    "technical_novelty_and_significance",
+    "empirical_novelty_and_significance",
+]
+
 
 @dataclass
 class DropStats:
     null_or_empty_review: int = 0
     pre_min_year: int = 0
+    excluded_decision: int = 0
     missing_paper_id: int = 0
     too_short: int = 0
     bad_date: int = 0
@@ -96,12 +126,24 @@ def parse_year_from_value(value, col_type: str) -> Optional[int]:
     # Timestamp/string parsing
     if col_type == "timestamp":
         val_str = str(value)
-        # Try ISO8601 or YYYY-MM-DD style
         match = re.match(r"(\d{4})", val_str)
         if match:
             year = int(match.group(1))
             if 1900 <= year <= 2100:
                 return year
+    return None
+
+
+def parse_leading_number(value: object) -> Optional[float]:
+    """Extract leading number from strings like '8: Top 50% ...'."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)", value)
+        if m:
+            return float(m.group(1))
     return None
 
 
@@ -114,17 +156,34 @@ def normalize_text(text: Optional[str]) -> str:
     return text
 
 
+def _detect_score_columns(cursor: sqlite3.Cursor) -> list[str]:
+    """Return the subset of SCORE_COLUMNS that exist in the REVIEW table."""
+    cursor.execute("PRAGMA table_info(REVIEW)")
+    existing = {row[1].lower() for row in cursor.fetchall()}
+    return [c for c in SCORE_COLUMNS if c.lower() in existing]
+
+
 def export_review_subset(
     db_path: Path,
     out_path: Path,
     n: int = 200,
     seed: int = 42,
     min_year: Optional[int] = None,
+    year: Optional[int] = None,
+    exclude_decisions: Optional[list[str]] = None,
     min_review_chars: int = 50,
     allow_missing_year_filter: bool = False,
     keep_bad_dates: bool = False,
 ) -> DropStats:
-    """Export a clean subset of papers with reviews."""
+    """Export a clean subset of papers with reviews.
+
+    Parameters
+    ----------
+    year : optional int
+        If set, only export papers from this exact year.
+    exclude_decisions : optional list[str]
+        Decision values to exclude (e.g. ["Withdrawn", "Desk Reject"]).
+    """
     stats = DropStats()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -140,49 +199,103 @@ def export_review_subset(
         year_col, year_col_type = year_col_info
         print(f"Using year column: {year_col} (type: {year_col_type})")
     else:
-        if min_year is not None and not allow_missing_year_filter:
+        if (min_year is not None or year is not None) and not allow_missing_year_filter:
             raise ValueError(
                 "No year/date column found in SUBMISSION table. "
                 "Pass --allow-missing-year-filter to export without year filtering."
             )
         print("Warning: No year column found. Year filtering disabled.")
 
+    # Detect available score columns
+    available_scores = _detect_score_columns(cursor)
+    if available_scores:
+        print(f"Score columns found: {available_scores}")
+    else:
+        print("Warning: No score columns found in REVIEW table.")
+
     # Build query
+    # Review text: prefer main_review, fall back to summary_of_the_review
+    # (2023+ papers store the review in summary_of_the_review, not main_review)
+    # Also fetch summary (reviewer's summary OF the paper) as a separate field.
     year_select = f", s.{year_col}" if year_col else ""
+    score_select = "".join(f", r.{c}" for c in available_scores)
+    review_expr = (
+        "COALESCE(NULLIF(TRIM(r.main_review), ''), "
+        "NULLIF(TRIM(r.summary_of_the_review), ''))"
+    )
     query = f"""
-        SELECT 
+        SELECT
             s.id as paper_id,
             s.title,
             s.abstract,
             s.primary_area,
-            r.main_review
+            s.decision,
+            {review_expr} as review_text,
+            r.summary as paper_summary
+            {score_select}
             {year_select}
         FROM REVIEW r
         JOIN SUBMISSION s ON r.paper_id = s.id
-        WHERE r.main_review IS NOT NULL 
-          AND TRIM(r.main_review) != ''
+        WHERE {review_expr} IS NOT NULL
     """
+
+    # Count total joined rows (including empty reviews) for accurate stats
+    count_query = """
+        SELECT COUNT(*) FROM REVIEW r
+        JOIN SUBMISSION s ON r.paper_id = s.id
+    """
+    cursor.execute(count_query)
+    total_joined = cursor.fetchone()[0]
 
     cursor.execute(query)
     rows = cursor.fetchall()
     conn.close()
 
-    stats.total_candidates = len(rows)
+    stats.total_candidates = total_joined
+    stats.null_or_empty_review = total_joined - len(rows)
     print(f"Total joined rows (pre-filters): {stats.total_candidates}")
+    if stats.null_or_empty_review > 0:
+        print(f"  (of which {stats.null_or_empty_review} had null/empty review text)")
+
+    # Normalise exclude_decisions for case-insensitive matching
+    excluded_set: set[str] = set()
+    if exclude_decisions:
+        excluded_set = {d.strip().lower() for d in exclude_decisions}
 
     # Process and filter
     candidates = []
     for row in rows:
+        idx = 0
+        paper_id = row[idx]; idx += 1
+        title = row[idx]; idx += 1
+        abstract = row[idx]; idx += 1
+        primary_area = row[idx]; idx += 1
+        decision = row[idx]; idx += 1
+        review_text = row[idx]; idx += 1
+        paper_summary = row[idx]; idx += 1
+
+        # Score columns
+        score_raw: dict[str, object] = {}
+        for col in available_scores:
+            score_raw[col] = row[idx]; idx += 1
+
+        # Year column (always last)
+        year_val = None
         if year_col:
-            paper_id, title, abstract, primary_area, main_review, year_val = row
-        else:
-            paper_id, title, abstract, primary_area, main_review = row
-            year_val = None
+            year_val = row[idx]; idx += 1
 
         # Check paper_id
         if not paper_id or not str(paper_id).strip():
             stats.missing_paper_id += 1
             continue
+
+        # Decision filter — only exclude explicitly listed decisions;
+        # papers with null/empty decisions are kept (they're just unrecorded).
+        if excluded_set:
+            dec_str = (decision or "").strip().lower()
+            if dec_str and dec_str in excluded_set:
+                stats.excluded_decision += 1
+                continue
 
         # Parse year
         year_int = None
@@ -193,14 +306,20 @@ def export_review_subset(
                     stats.bad_date += 1
                     continue
 
-        # Year filter
+        # Exact year filter
+        if year is not None and year_int is not None:
+            if year_int != year:
+                stats.pre_min_year += 1
+                continue
+
+        # Min year filter
         if min_year is not None and year_int is not None:
             if year_int < min_year:
                 stats.pre_min_year += 1
                 continue
 
         # Normalize review text
-        clean_review = normalize_text(main_review)
+        clean_review = normalize_text(review_text)
         if len(clean_review) < min_review_chars:
             stats.too_short += 1
             continue
@@ -209,14 +328,29 @@ def export_review_subset(
         clean_title = normalize_text(title)
         clean_abstract = normalize_text(abstract)
         clean_primary_area = normalize_text(primary_area) or "general"
+        clean_decision = normalize_text(decision) or None
+        clean_paper_summary = normalize_text(paper_summary) or None
+
+        # Parse scores
+        parsed_scores: dict[str, dict] = {}
+        for col in available_scores:
+            raw_val = score_raw.get(col)
+            raw_str = str(raw_val) if raw_val is not None else ""
+            parsed_scores[col] = {
+                "raw": raw_str,
+                "value": parse_leading_number(raw_val),
+            }
 
         candidates.append({
             "paper_id": str(paper_id).strip(),
             "title": clean_title,
             "abstract": clean_abstract,
             "primary_area": clean_primary_area,
+            "decision": clean_decision,
             "year": year_int,
             "main_review": clean_review,
+            "paper_summary": clean_paper_summary,
+            "scores": parsed_scores,
         })
 
     print(f"Candidates after filtering: {len(candidates)}")
@@ -230,8 +364,10 @@ def export_review_subset(
 
     # Build output
     exported_at = datetime.now(timezone.utc).isoformat()
-    meta_filters = {
+    meta_filters: dict = {
         "min_year": min_year,
+        "year": year,
+        "exclude_decisions": list(excluded_set) if excluded_set else None,
         "min_review_chars": min_review_chars,
     }
 
@@ -241,13 +377,20 @@ def export_review_subset(
             if rec["year"] is not None:
                 stats.years.append(rec["year"])
 
+            review_obj: dict = {
+                "main_review": rec["main_review"],
+                "paper_summary": rec["paper_summary"],
+            }
+            review_obj.update(rec["scores"])
+
             output_record = {
                 "paper_id": rec["paper_id"],
                 "title": rec["title"],
                 "abstract": rec["abstract"],
                 "primary_area": rec["primary_area"],
+                "decision": rec["decision"],
                 "year": rec["year"],
-                "review": {"main_review": rec["main_review"]},
+                "review": review_obj,
                 "meta": {
                     "source": "gen_review_sqlite",
                     "filters": meta_filters,
@@ -269,6 +412,7 @@ def print_summary(stats: DropStats) -> None:
     print("\nDropped by reason:")
     print(f"  - null_or_empty_review: {stats.null_or_empty_review}")
     print(f"  - pre_min_year: {stats.pre_min_year}")
+    print(f"  - excluded_decision: {stats.excluded_decision}")
     print(f"  - missing_paper_id: {stats.missing_paper_id}")
     print(f"  - too_short: {stats.too_short}")
     print(f"  - bad_date: {stats.bad_date}")
@@ -287,79 +431,49 @@ def print_summary(stats: DropStats) -> None:
         print(f"\nYear distribution (kept):")
         print(f"  - min: {min(stats.years)}, max: {max(stats.years)}")
         print("  - top counts:")
-        for year, count in year_counts.most_common(5):
-            print(f"      {year}: {count}")
+        for y, count in year_counts.most_common(5):
+            print(f"      {y}: {count}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Export a clean subset of papers with reviews from Gen-Review SQLite."
     )
-    parser.add_argument(
-        "--db-path",
-        type=Path,
-        default=Path("data/gen_review.db"),
-        help="Path to SQLite database",
-    )
-    parser.add_argument(
-        "--out-path",
-        type=Path,
-        default=Path("outputs/review_subset.jsonl"),
-        help="Output JSONL path",
-    )
-    parser.add_argument(
-        "--n",
-        type=int,
-        default=200,
-        help="Number of samples to export",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for deterministic sampling",
-    )
-    parser.add_argument(
-        "--min-year",
-        type=int,
-        default=None,
-        help="Minimum year filter (e.g., 2021)",
-    )
-    parser.add_argument(
-        "--min-review-chars",
-        type=int,
-        default=50,
-        help="Minimum review length in characters after normalization",
-    )
-    parser.add_argument(
-        "--allow-missing-year-filter",
-        action="store_true",
-        help="Allow export without year filtering if no year column exists",
-    )
-    parser.add_argument(
-        "--keep-bad-dates",
-        action="store_true",
-        help="Keep rows with unparseable dates (year will be null)",
-    )
+    parser.add_argument("--db-path", type=Path, default=Path("data/gen_review.db"), help="Path to SQLite database")
+    parser.add_argument("--out-path", type=Path, default=Path("outputs/review_subset.jsonl"), help="Output JSONL path")
+    parser.add_argument("--n", type=int, default=200, help="Number of samples to export")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic sampling")
+    parser.add_argument("--min-year", type=int, default=None, help="Minimum year filter (e.g., 2021)")
+    parser.add_argument("--year", type=int, default=None, help="Exact year filter (e.g., 2023)")
+    parser.add_argument("--exclude-decisions", type=str, default=None,
+                        help='Comma-separated decisions to exclude (e.g., "Withdrawn,Desk Reject,Invite to Workshop")')
+    parser.add_argument("--min-review-chars", type=int, default=50, help="Min review length in characters after normalization")
+    parser.add_argument("--allow-missing-year-filter", action="store_true", help="Allow export without year filtering")
+    parser.add_argument("--keep-bad-dates", action="store_true", help="Keep rows with unparseable dates (year will be null)")
 
     args = parser.parse_args()
 
     if not args.db_path.exists():
         raise FileNotFoundError(f"Database not found: {args.db_path}")
 
+    exclude_decisions = None
+    if args.exclude_decisions:
+        exclude_decisions = [d.strip() for d in args.exclude_decisions.split(",")]
+
     print(f"Exporting from: {args.db_path}")
     print(f"Output to: {args.out_path}")
     print(f"Samples: {args.n}, Seed: {args.seed}")
     if args.min_year:
         print(f"Min year: {args.min_year}")
+    if args.year:
+        print(f"Exact year: {args.year}")
+    if exclude_decisions:
+        print(f"Excluding decisions: {exclude_decisions}")
     print(f"Min review chars: {args.min_review_chars}")
 
     stats = export_review_subset(
-        db_path=args.db_path,
-        out_path=args.out_path,
-        n=args.n,
-        seed=args.seed,
-        min_year=args.min_year,
+        db_path=args.db_path, out_path=args.out_path, n=args.n, seed=args.seed,
+        min_year=args.min_year, year=args.year, exclude_decisions=exclude_decisions,
         min_review_chars=args.min_review_chars,
         allow_missing_year_filter=args.allow_missing_year_filter,
         keep_bad_dates=args.keep_bad_dates,
