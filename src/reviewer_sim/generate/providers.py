@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -283,9 +285,23 @@ class TogetherGenerator:
                 )
                 if response.status_code == 429:
                     import time
+                    print(f"\n[429] Rate limited. Retrying in {2**attempt}s...")
                     time.sleep(2 ** attempt)
                     continue
-                response.raise_for_status()
+
+                if response.status_code >= 400:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        print(f"\n[API Error] {e}")
+                        print(f"Server response provided: {response.text}")
+                        # Don't retry client errors (4xx) except 429
+                        if response.status_code < 500:
+                            result: Dict = {"text": f"[API error: {response.status_code}]"}
+                            for dim in SCORE_DIMENSIONS:
+                                result[dim] = None
+                            return result
+                        raise e
 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]

@@ -16,6 +16,8 @@ Usage:
     make compare
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -96,11 +98,47 @@ def compute_summary(path: Path) -> dict:
     }
 
 
-def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
-    """Print a sorted comparison table.
+def generate_markdown_table(entries: list[tuple[str, dict]]) -> str:
+    """Generate a markdown comparison table."""
+    # Sort by MAE ascending (lower is better); None goes to bottom
+    entries.sort(
+        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+    )
 
-    entries: list of (label, summary_dict)
-    """
+    header_dims = " | ".join(f"{DIM_SHORT[d]}" for d in SCORE_DIMENSIONS)
+    header = (
+        f"| Rank | Model | MAE | Cov% | DecAgr | {header_dims} | N |\n"
+        f"|------|-------|-----|------|--------|{'-|-'.join(['---'] * len(SCORE_DIMENSIONS))}|---|"
+    )
+
+    rows = []
+    for rank, (label, summary) in enumerate(entries, 1):
+        mae_str = (
+            f"{summary['mae_mean']:.3f}"
+            if summary["mae_mean"] is not None
+            else "n/a"
+        )
+        cov_str = f"{summary['coverage_pct']:.0f}%"
+        if summary["decision_agree_pct"] is not None:
+            agree_str = f"{summary['decision_agree_pct']:.1f}%"
+        else:
+            agree_str = "n/a"
+
+        dim_strs = []
+        for dim in SCORE_DIMENSIONS:
+            v = summary["dim_mae"].get(dim)
+            dim_strs.append(f"{v:.2f}" if v is not None else "n/a")
+        dim_cols = " | ".join(dim_strs)
+
+        rows.append(
+            f"| {rank} | {label} | {mae_str} | {cov_str} | {agree_str} | {dim_cols} | {summary['n']} |"
+        )
+
+    return f"# Model Comparison Report\n\n{header}\n" + "\n".join(rows) + "\n"
+
+
+def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
+    """Print a sorted comparison table to stdout."""
     # Sort by MAE ascending (lower is better); None goes to bottom
     entries.sort(
         key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
@@ -165,6 +203,12 @@ def main() -> None:
         default=Path("outputs"),
         help="Directory to search for results files (default: outputs/)",
     )
+    parser.add_argument(
+        "--report-file",
+        type=Path,
+        default=Path("outputs/comparison_report.md"),
+        help="Path to save markdown report (default: outputs/comparison_report.md)",
+    )
     args = parser.parse_args()
 
     if args.paths:
@@ -188,6 +232,16 @@ def main() -> None:
         entries.append((label, summary))
 
     print_comparison_table(entries)
+
+    # Generate and save report
+    report = generate_markdown_table(entries)
+    
+    # Ensure directory exists
+    args.report_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(args.report_file, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"Report saved to: {args.report_file}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Verify 2023 columns in data/gen_review.db:
 - summary vs summary_of_the_review from REVIEW
@@ -6,6 +5,8 @@ Verify 2023 columns in data/gen_review.db:
 - generated from GENAI_REVIEW (type='neutral')
 - Counts for summary_of_the_review and GENAI_REVIEW neutral.
 """
+
+from __future__ import annotations
 
 import sqlite3
 import sys

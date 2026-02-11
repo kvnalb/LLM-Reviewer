@@ -43,7 +43,7 @@ import numpy as np
 # Config
 # ---------------------------------------------------------------------------
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "gen_review.db"
+DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "gen_review.db"
 PLOT_DIR = Path(__file__).resolve().parent / "plots"
 
 NUMERIC_COLUMNS = [

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +19,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
     '  "empirical_novelty_and_significance": int 1-4 '
     "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
-    '  "rationale": 1-2 sentence justification for the scores.\n'
+    '  "rationale": string (MUST be 3 sentences or fewer. Be concise.).\n'
     "No markdown, no extra text. JSON only."
 )
 
