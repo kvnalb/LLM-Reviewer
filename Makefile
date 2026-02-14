@@ -2,17 +2,42 @@ PYTHONPATH := $(shell pwd)/src
 INPUT_JSONL ?= outputs/review_subset.jsonl
 OUTPUT_JSONL ?= outputs/results.jsonl
 
-# Export clean subset from SQLite
+# Export clean subset from SQLite (with pdf_url for PDF extraction)
 export:
 	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.export_review_subset \
 		--db-path data/gen_review.db \
 		--out-path outputs/review_subset.jsonl \
-		--n 200 --seed 42 --min-review-chars 50 \
+		--n 120 --seed 42 --min-review-chars 50 \
 		--year 2023 \
 		--exclude-decisions "Withdrawn,Desk Reject,Invite to Workshop"
 
 # Enrich with LLM-classified primary areas (requires TOGETHER_API_KEY)
 
+# Extract PDF content from papers (separate step)
+extract-pdf:
+	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.extract_pdf_content \
+		--input outputs/review_subset.jsonl \
+		--output outputs/review_subset_with_pdf.jsonl \
+		--mode sections \
+		--cache data/pdf_cache
+
+# Extract PDF content with full-text mode (alternative)
+extract-pdf-fulltext:
+	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.extract_pdf_content \
+		--input outputs/review_subset.jsonl \
+		--output outputs/review_subset_with_pdf_fulltext.jsonl \
+		--mode fulltext \
+		--cache data/pdf_cache
+
+# Run pipeline with PDF content (requires extract-pdf to be run first)
+run-with-pdf:
+	PYTHONPATH=$(PYTHONPATH) \
+	INPUT_JSONL=outputs/review_subset_with_pdf.jsonl \
+	OUTPUT_JSONL=outputs/results_with_pdf.jsonl \
+	$(MAKE) run
+
+# Full workflow: export → extract PDFs → run
+full-pipeline: export extract-pdf run-with-pdf
 
 # Run review simulation pipeline
 run:

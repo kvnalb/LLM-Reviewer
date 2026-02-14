@@ -6,8 +6,13 @@ from pathlib import Path
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are an ICLR peer reviewer. Given a paper's title and abstract, "
-    "predict the review scores. Return ONLY a valid JSON object with these keys:\n"
+    "You are an ICLR peer reviewer. Given a paper's content (including title, abstract, "
+    "and key sections), predict the review scores. Focus on:\n"
+    "- Novelty and significance of the contribution\n"
+    "- Correctness and rigor of the methodology\n"
+    "- Quality of the empirical evaluation\n"
+    "- Clarity of presentation\n\n"
+    "Return ONLY a valid JSON object with these keys:\n"
     '  "rating": int 1-10 '
     "(1: strong reject, 3: clear reject, 5: borderline reject, "
     "6: weak accept, 8: top 50% of accepted, 10: top 5%),\n"
@@ -42,7 +47,7 @@ def load_model_config() -> ModelConfig:
     temperature = float(os.environ.get("TEMPERATURE", "0.2"))
     max_tokens = int(os.environ.get("MAX_TOKENS", "200"))
     top_p = float(os.environ.get("TOP_P", "0.95"))
-    n_ctx = int(os.environ.get("N_CTX", "4096"))
+    n_ctx = int(os.environ.get("N_CTX", "8192"))
     n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", "-1"))
     system_prompt = os.environ.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 

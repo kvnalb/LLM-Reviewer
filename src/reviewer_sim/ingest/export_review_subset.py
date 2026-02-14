@@ -31,6 +31,7 @@ Output schema per line:
         "paper_id": "<str>",
         "title": "<str>",
         "abstract": "<str>",
+        "pdf_url": "<str or null>",
         "primary_area": "<str>",
         "year": <int or null>,
         "decision": "<str or null>",
@@ -230,6 +231,7 @@ def export_review_subset(
             s.abstract,
             s.primary_area,
             s.decision,
+            s.pdf as pdf_url,
             {review_expr} as review_text,
             r.summary as paper_summary
             {score_select}
@@ -271,6 +273,7 @@ def export_review_subset(
         abstract = row[idx]; idx += 1
         primary_area = row[idx]; idx += 1
         decision = row[idx]; idx += 1
+        pdf_url = row[idx]; idx += 1
         review_text = row[idx]; idx += 1
         paper_summary = row[idx]; idx += 1
 
@@ -345,6 +348,7 @@ def export_review_subset(
             "paper_id": str(paper_id).strip(),
             "title": clean_title,
             "abstract": clean_abstract,
+            "pdf_url": normalize_text(pdf_url) or None,
             "primary_area": clean_primary_area,
             "decision": clean_decision,
             "year": year_int,
@@ -387,6 +391,7 @@ def export_review_subset(
                 "paper_id": rec["paper_id"],
                 "title": rec["title"],
                 "abstract": rec["abstract"],
+                "pdf_url": rec.get("pdf_url"),
                 "primary_area": rec["primary_area"],
                 "decision": rec["decision"],
                 "year": rec["year"],
@@ -441,7 +446,7 @@ def main() -> None:
     )
     parser.add_argument("--db-path", type=Path, default=Path("data/gen_review.db"), help="Path to SQLite database")
     parser.add_argument("--out-path", type=Path, default=Path("outputs/review_subset.jsonl"), help="Output JSONL path")
-    parser.add_argument("--n", type=int, default=200, help="Number of samples to export")
+    parser.add_argument("--n", type=int, default=120, help="Number of samples to export")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic sampling")
     parser.add_argument("--min-year", type=int, default=None, help="Minimum year filter (e.g., 2021)")
     parser.add_argument("--year", type=int, default=None, help="Exact year filter (e.g., 2023)")

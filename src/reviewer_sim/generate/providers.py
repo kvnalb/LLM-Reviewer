@@ -126,13 +126,22 @@ class LlamaCppGenerator:
 
     def _build_prompt(self, example: Dict) -> str:
         title = example.get("title", "Untitled")
-        abstract = example.get("abstract", "") or ""
+
+        # Check for PDF content first, fallback to abstract
+        pdf_content = example.get("pdf_content", {})
+        if pdf_content and pdf_content.get("extraction_metadata", {}).get("success"):
+            content = pdf_content.get("full_text", "")
+            content_label = "Paper Content"
+        else:
+            content = example.get("abstract", "") or ""
+            content_label = "Abstract"
 
         prompt = f"""{self.config.system_prompt}
 
 Title: {title}
 
-Abstract: {abstract}
+{content_label}:
+{content}
 
 Predict the review scores as JSON."""
         return prompt
@@ -250,11 +259,19 @@ class TogetherGenerator:
 
     def _build_messages(self, example: Dict) -> list[dict]:
         title = example.get("title", "Untitled")
-        abstract = example.get("abstract", "") or ""
+
+        # Check for PDF content first, fallback to abstract
+        pdf_content = example.get("pdf_content", {})
+        if pdf_content and pdf_content.get("extraction_metadata", {}).get("success"):
+            content = pdf_content.get("full_text", "")[:20000]  # Conservative char limit
+            content_label = "Paper Content"
+        else:
+            content = (example.get("abstract", "") or "")[:3000]  # Keep old truncation
+            content_label = "Abstract"
 
         user_content = (
             f"Title: {title}\n\n"
-            f"Abstract: {abstract[:3000]}\n\n"
+            f"{content_label}:\n{content}\n\n"
             "Predict the review scores as JSON."
         )
         return [
