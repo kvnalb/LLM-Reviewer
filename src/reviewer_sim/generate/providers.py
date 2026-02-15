@@ -136,6 +136,8 @@ class LlamaCppGenerator:
             content = example.get("abstract", "") or ""
             content_label = "Abstract"
 
+        # Use explicit JSON formatting for base models (like Qwen)
+        # This is more compatible with non-chat models
         prompt = f"""{self.config.system_prompt}
 
 Title: {title}
@@ -143,7 +145,12 @@ Title: {title}
 {content_label}:
 {content}
 
-Predict the review scores as JSON."""
+IMPORTANT: Your response MUST be ONLY a valid JSON object. Do not include any text before or after the JSON.
+
+Example JSON format:
+{{"rating": 8, "confidence": 4, "correctness": 3, "technical_novelty_and_significance": 3, "empirical_novelty_and_significance": 3, "rationale": "Brief summary here"}}
+
+Now provide the JSON scores for the paper above:"""
         return prompt
 
     def _parse_json_response(self, content: str) -> Dict:
