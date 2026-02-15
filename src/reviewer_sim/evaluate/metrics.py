@@ -47,14 +47,23 @@ def parse_numeric_rating(value: object) -> Optional[float]:
 def _extract_human_score(review: Dict, dim: str) -> Optional[float]:
     """Get parsed numeric value for *dim* from the human review dict.
 
-    Handles both the new schema (``review[dim]["value"]``) and a flat
-    fallback (``review[dim]``).
+    Handles multiple schemas:
+    1. New aggregated schema: review[dim]["mean"] (average across reviewers)
+    2. Old single-reviewer schema: review[dim]["value"]
+    3. Flat fallback: review[dim]
     """
     entry = review.get(dim)
     if entry is None:
         return None
+
+    # New aggregated schema: use mean score across all reviewers
     if isinstance(entry, dict):
-        return parse_numeric_rating(entry.get("value"))
+        if "mean" in entry:  # New aggregated schema
+            return parse_numeric_rating(entry.get("mean"))
+        elif "value" in entry:  # Old single-reviewer schema
+            return parse_numeric_rating(entry.get("value"))
+
+    # Fallback
     return parse_numeric_rating(entry)
 
 
@@ -87,9 +96,9 @@ def evaluate(
     Parameters
     ----------
     example : dict
-        A record from the exported JSONL.  Human scores live under
-        ``example["review"][dim]`` (either ``{"raw": ..., "value": ...}``
-        or a plain number).
+        A record from the exported JSONL.  Human scores live under:
+        - New schema: ``example["reviews"][dim]`` with {"mean": ..., "values": [...], ...}
+        - Old schema: ``example["review"][dim]`` with {"raw": ..., "value": ...}
     generated : dict
         Output of a generator.  Scores are top-level keys.
     accept_threshold : int
@@ -102,7 +111,13 @@ def evaluate(
     dict with per-dimension errors, robust metrics (NMAE, RMSE, Spearman),
     decision_agree, and optionally text metrics.
     """
-    human_review = example.get("review", {}) or {}
+    # Handle both old ("review") and new ("reviews") schemas
+    if "reviews" in example:
+        # New aggregated schema
+        human_review = example.get("reviews", {}) or {}
+    else:
+        # Old single-reviewer schema
+        human_review = example.get("review", {}) or {}
 
     result: Dict = {}
     abs_errors: list[float] = []
