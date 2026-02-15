@@ -25,13 +25,13 @@ from typing import List
 # ---------------------------------------------------------------------------
 # Configure your experiment here.
 # Each entry: (together_model_id, short_label_for_display)
+# NOTE: Prefer serverless models (no dedicated endpoint required)
 # ---------------------------------------------------------------------------
 MODELS: List[tuple[str, str]] = [
-    ("meta-llama/Llama-3-8b-chat-hf", "Llama-3-8B"),
+    ("openai/gpt-oss-20b", "GPT-OSS-20B"),
+    ("deepseek-ai/deepseek-v3.1", "DeepSeek-V3.1"),
     ("meta-llama/Llama-3-70b-chat-hf", "Llama-3-70B"),
     ("mistralai/Mixtral-8x7B-Instruct-v0.1", "Mixtral-8x7B"),
-    ("mistralai/Mistral-7B-Instruct-v0.3", "Mistral-7B-v0.3"),
-    ("Qwen/Qwen2-72B-Instruct", "Qwen2-72B"),
 ]
 
 INPUT_JSONL = "outputs/review_subset.jsonl"

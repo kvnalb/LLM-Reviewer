@@ -73,15 +73,15 @@ run-llamacpp:
 	python -m reviewer_sim.run
 
 # Run with Together AI (requires TOGETHER_API_KEY and MODEL_PATH)
-# Override OUTPUT_JSONL to write to a different file per model, e.g.:
-#   make run-together MODEL_PATH=meta-llama/Llama-3-8b-chat-hf OUTPUT_JSONL=outputs/results_llama3_8b.jsonl
+# Default model is openai/gpt-oss-20b (serverless). Override with:
+#   make run-together MODEL_PATH=deepseek-ai/deepseek-v3.1 OUTPUT_JSONL=outputs/results_deepseek.jsonl
 TOGETHER_OUTPUT_JSONL ?= outputs/results_together.jsonl
+TOGETHER_MODEL_PATH ?= openai/gpt-oss-20b
 run-together:
 	@if [ -z "$(TOGETHER_API_KEY)" ]; then echo "ERROR: TOGETHER_API_KEY env var is required"; exit 1; fi
-	@if [ -z "$(MODEL_PATH)" ]; then echo "ERROR: MODEL_PATH env var is required (e.g. meta-llama/Llama-3-8b-chat-hf)"; exit 1; fi
 	PYTHONPATH=$(PYTHONPATH) \
 	MODEL_PROVIDER=together \
-	MODEL_PATH=$(MODEL_PATH) \
+	MODEL_PATH=${MODEL_PATH:-${TOGETHER_MODEL_PATH}} \
 	TOGETHER_API_KEY=$(TOGETHER_API_KEY) \
 	INPUT_JSONL=outputs/review_subset.jsonl \
 	OUTPUT_JSONL=$(TOGETHER_OUTPUT_JSONL) \
