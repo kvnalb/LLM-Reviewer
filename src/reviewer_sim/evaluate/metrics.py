@@ -1,10 +1,12 @@
 """
 Evaluation metrics for comparing generated reviews to human reviews.
 
-Primary metrics are numerical:
-  - Per-dimension absolute error for each of the 5 score columns
-  - Mean absolute error (MAE) across scored dimensions
-  - Decision agreement (whether rating falls on same side of accept threshold)
+Primary metrics are scale-aware:
+  - Normalized MAE (NMAE): error divided by each dimension's range
+  - RMSE: root mean square error
+  - Spearman correlation: rank correlation (robust to scale differences)
+  - Decision agreement: whether rating falls on same side of accept threshold
+  - Per-dimension normalized error: shows which dimensions are harder
 
 Text-based metrics (TF-IDF cosine, keyword Jaccard) are retained behind an
 optional flag for reference but are *not* the primary evaluation.
@@ -16,6 +18,15 @@ from typing import Dict, Optional
 from reviewer_sim.ingest.export_review_subset import SCORE_COLUMNS
 
 SCORE_DIMENSIONS = SCORE_COLUMNS
+
+# Scale ranges for each dimension (used for normalization)
+SCORE_RANGES = {
+    "rating": (1, 10),  # range = 9
+    "confidence": (1, 5),  # range = 4
+    "correctness": (1, 4),  # range = 3
+    "technical_novelty_and_significance": (1, 4),  # range = 3
+    "empirical_novelty_and_significance": (1, 4),  # range = 3
+}
 
 DEFAULT_ACCEPT_THRESHOLD = 6
 
@@ -47,6 +58,24 @@ def _extract_human_score(review: Dict, dim: str) -> Optional[float]:
     return parse_numeric_rating(entry)
 
 
+def _normalized_error(abs_error: float, dim: str) -> Optional[float]:
+    """Normalize error by the range of the dimension.
+
+    NMAE (Normalized Mean Absolute Error) = error / range
+    This makes errors comparable across different scales.
+
+    For example:
+    - Error of 1 point on rating (range 9): 1/9 = 0.11
+    - Error of 1 point on confidence (range 4): 1/4 = 0.25
+    - Error of 1 point on correctness (range 3): 1/3 = 0.33
+    """
+    if dim not in SCORE_RANGES:
+        return None
+    min_val, max_val = SCORE_RANGES[dim]
+    range_val = max_val - min_val
+    return abs_error / range_val if range_val > 0 else None
+
+
 def evaluate(
     example: Dict,
     generated: Dict,
@@ -70,13 +99,19 @@ def evaluate(
 
     Returns
     -------
-    dict with per-dimension abs errors, mae, decision_agree, and optionally
-    text metrics.
+    dict with per-dimension errors, robust metrics (NMAE, RMSE, Spearman),
+    decision_agree, and optionally text metrics.
     """
     human_review = example.get("review", {}) or {}
 
     result: Dict = {}
     abs_errors: list[float] = []
+    normalized_errors: list[float] = []
+    squared_errors: list[float] = []
+
+    # For correlation calculation
+    human_vals: list[float] = []
+    gen_vals: list[float] = []
 
     for dim in SCORE_DIMENSIONS:
         human_val = _extract_human_score(human_review, dim)
@@ -86,11 +121,49 @@ def evaluate(
             err = abs(human_val - gen_val)
             result[f"{dim}_abs_err"] = err
             abs_errors.append(err)
+
+            # Normalized error (scale-aware)
+            norm_err = _normalized_error(err, dim)
+            if norm_err is not None:
+                result[f"{dim}_norm_err"] = norm_err
+                normalized_errors.append(norm_err)
+
+            # Squared error (for RMSE)
+            squared_errors.append(err ** 2)
+
+            # Track for correlation
+            human_vals.append(human_val)
+            gen_vals.append(gen_val)
         else:
             result[f"{dim}_abs_err"] = None
+            result[f"{dim}_norm_err"] = None
 
+    # Primary metric: Normalized MAE (scale-aware)
+    result["nmae"] = sum(normalized_errors) / len(normalized_errors) if normalized_errors else None
+
+    # Secondary metric: RMSE (penalizes larger errors)
+    result["rmse"] = (sum(squared_errors) / len(squared_errors)) ** 0.5 if squared_errors else None
+
+    # Legacy metric: MAE (kept for backward compatibility, but NMAE is preferred)
     result["mae"] = sum(abs_errors) / len(abs_errors) if abs_errors else None
 
+    # Correlation: Spearman rank correlation (robust to scale)
+    if len(human_vals) >= 3:  # Need at least 3 points for correlation
+        try:
+            from scipy.stats import spearmanr
+            import math
+            corr, pval = spearmanr(human_vals, gen_vals)
+            result["spearman_corr"] = float(corr) if not math.isnan(corr) else None
+            result["spearman_pval"] = float(pval) if not math.isnan(pval) else None
+        except (ImportError, Exception):
+            # Fallback if scipy not available
+            result["spearman_corr"] = None
+            result["spearman_pval"] = None
+    else:
+        result["spearman_corr"] = None
+        result["spearman_pval"] = None
+
+    # Decision agreement (accept vs reject)
     human_rating = _extract_human_score(human_review, "rating")
     gen_rating = parse_numeric_rating(generated.get("rating"))
     if human_rating is not None and gen_rating is not None:
