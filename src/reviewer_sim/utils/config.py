@@ -47,7 +47,7 @@ def load_model_config() -> ModelConfig:
     provider = os.environ.get("MODEL_PROVIDER", "mock").lower()
     model_path = os.environ.get("MODEL_PATH")
     temperature = float(os.environ.get("TEMPERATURE", "0.2"))
-    max_tokens = int(os.environ.get("MAX_TOKENS", "200"))
+    max_tokens = int(os.environ.get("MAX_TOKENS", "500"))
     top_p = float(os.environ.get("TOP_P", "0.95"))
     n_ctx = int(os.environ.get("N_CTX", "16384"))
     n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", "-1"))
