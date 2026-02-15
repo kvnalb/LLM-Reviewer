@@ -35,14 +35,28 @@ Output schema per line:
         "primary_area": "<str>",
         "year": <int or null>,
         "decision": "<str or null>",
-        "review": {
-            "main_review": "<str>",
-            "paper_summary": "<str or null>",
-            "rating": {"raw": "<str>", "value": <float or null>},
-            "confidence": {"raw": "<str>", "value": <float or null>},
-            "correctness": {"raw": "<str>", "value": <float or null>},
-            "technical_novelty_and_significance": {"raw": "<str>", "value": <float or null>},
-            "empirical_novelty_and_significance": {"raw": "<str>", "value": <float or null>}
+        "reviews": {
+            "count": <int>,  # Number of human reviewers
+            "rating": {
+                "values": [<float>, ...],  # Individual reviewer scores
+                "mean": <float>,           # Average across reviewers
+                "median": <float>,
+                "std": <float>
+            },
+            "confidence": {...},  # Same structure for each dimension
+            "correctness": {...},
+            "technical_novelty_and_significance": {...},
+            "empirical_novelty_and_significance": {...},
+            "all_reviews": [  # Full individual reviews for inspection
+                {
+                    "reviewer_id": "<str>",
+                    "main_review": "<str>",
+                    "rating": <float>,
+                    "confidence": <float>,
+                    ...
+                },
+                ...
+            ]
         },
         "meta": {
             "source": "gen_review_sqlite",
@@ -214,10 +228,8 @@ def export_review_subset(
     else:
         print("Warning: No score columns found in REVIEW table.")
 
-    # Build query
-    # Review text: prefer main_review, fall back to summary_of_the_review
-    # (2023+ papers store the review in summary_of_the_review, not main_review)
-    # Also fetch summary (reviewer's summary OF the paper) as a separate field.
+    # Build query to fetch ALL reviews for each paper
+    # (We'll aggregate them later, not cherry-pick one reviewer)
     year_select = f", s.{year_col}" if year_col else ""
     score_select = "".join(f", r.{c}" for c in available_scores)
     review_expr = (
@@ -232,6 +244,7 @@ def export_review_subset(
             s.primary_area,
             s.decision,
             s.pdf as pdf_url,
+            r.reviewer_id,
             {review_expr} as review_text,
             r.summary as paper_summary
             {score_select}
@@ -239,34 +252,26 @@ def export_review_subset(
         FROM REVIEW r
         JOIN SUBMISSION s ON r.paper_id = s.id
         WHERE {review_expr} IS NOT NULL
+        ORDER BY s.id, r.reviewer_id
     """
 
     # Count total joined rows (including empty reviews) for accurate stats
     count_query = """
-        SELECT COUNT(*) FROM REVIEW r
+        SELECT COUNT(DISTINCT r.paper_id) FROM REVIEW r
         JOIN SUBMISSION s ON r.paper_id = s.id
     """
     cursor.execute(count_query)
-    total_joined = cursor.fetchone()[0]
+    total_papers = cursor.fetchone()[0]
 
     cursor.execute(query)
-    rows = cursor.fetchall()
+    all_reviews = cursor.fetchall()
     conn.close()
 
-    stats.total_candidates = total_joined
-    stats.null_or_empty_review = total_joined - len(rows)
-    print(f"Total joined rows (pre-filters): {stats.total_candidates}")
-    if stats.null_or_empty_review > 0:
-        print(f"  (of which {stats.null_or_empty_review} had null/empty review text)")
+    stats.total_candidates = total_papers
 
-    # Normalise exclude_decisions for case-insensitive matching
-    excluded_set: set[str] = set()
-    if exclude_decisions:
-        excluded_set = {d.strip().lower() for d in exclude_decisions}
-
-    # Process and filter
-    candidates = []
-    for row in rows:
+    # Group reviews by paper_id
+    papers_dict: dict = {}
+    for row in all_reviews:
         idx = 0
         paper_id = row[idx]; idx += 1
         title = row[idx]; idx += 1
@@ -274,26 +279,59 @@ def export_review_subset(
         primary_area = row[idx]; idx += 1
         decision = row[idx]; idx += 1
         pdf_url = row[idx]; idx += 1
+        reviewer_id = row[idx]; idx += 1
         review_text = row[idx]; idx += 1
         paper_summary = row[idx]; idx += 1
 
-        # Score columns
         score_raw: dict[str, object] = {}
         for col in available_scores:
             score_raw[col] = row[idx]; idx += 1
 
-        # Year column (always last)
         year_val = None
         if year_col:
             year_val = row[idx]; idx += 1
 
+        if paper_id not in papers_dict:
+            papers_dict[paper_id] = {
+                "paper_id": paper_id,
+                "title": title,
+                "abstract": abstract,
+                "primary_area": primary_area,
+                "decision": decision,
+                "pdf_url": pdf_url,
+                "year": year_val,
+                "reviews": []
+            }
+
+        papers_dict[paper_id]["reviews"].append({
+            "reviewer_id": reviewer_id,
+            "review_text": review_text,
+            "paper_summary": paper_summary,
+            "scores": score_raw
+        })
+
+    print(f"Total papers with reviews: {len(papers_dict)}")
+
+    null_or_empty_count = 0
+
+    # Normalise exclude_decisions for case-insensitive matching
+    excluded_set: set[str] = set()
+    if exclude_decisions:
+        excluded_set = {d.strip().lower() for d in exclude_decisions}
+
+    # Process and filter — now aggregate reviews per paper
+    from statistics import mean, stdev
+
+    candidates = []
+    for paper_id, paper_data in papers_dict.items():
         # Check paper_id
         if not paper_id or not str(paper_id).strip():
             stats.missing_paper_id += 1
             continue
 
-        # Decision filter — only exclude explicitly listed decisions;
-        # papers with null/empty decisions are kept (they're just unrecorded).
+        decision = paper_data["decision"]
+
+        # Decision filter
         if excluded_set:
             dec_str = (decision or "").strip().lower()
             if dec_str and dec_str in excluded_set:
@@ -302,6 +340,7 @@ def export_review_subset(
 
         # Parse year
         year_int = None
+        year_val = paper_data["year"]
         if year_col:
             year_int = parse_year_from_value(year_val, year_col_type)
             if year_int is None and year_val is not None:
@@ -321,40 +360,84 @@ def export_review_subset(
                 stats.pre_min_year += 1
                 continue
 
-        # Normalize review text
-        clean_review = normalize_text(review_text)
-        if len(clean_review) < min_review_chars:
+        # Aggregate reviews: check that we have at least one non-empty review
+        reviews = paper_data["reviews"]
+        has_valid_review = False
+        for review in reviews:
+            clean_review = normalize_text(review["review_text"])
+            if len(clean_review) >= min_review_chars:
+                has_valid_review = True
+                break
+
+        if not has_valid_review:
             stats.too_short += 1
             continue
 
         # Clean other fields
-        clean_title = normalize_text(title)
-        clean_abstract = normalize_text(abstract)
-        clean_primary_area = normalize_text(primary_area) or "general"
+        clean_title = normalize_text(paper_data["title"])
+        clean_abstract = normalize_text(paper_data["abstract"])
+        clean_primary_area = normalize_text(paper_data["primary_area"]) or "general"
         clean_decision = normalize_text(decision) or None
-        clean_paper_summary = normalize_text(paper_summary) or None
 
-        # Parse scores
-        parsed_scores: dict[str, dict] = {}
-        for col in available_scores:
-            raw_val = score_raw.get(col)
-            raw_str = str(raw_val) if raw_val is not None else ""
-            parsed_scores[col] = {
-                "raw": raw_str,
-                "value": parse_leading_number(raw_val),
-            }
+        # Aggregate scores across all reviewers
+        aggregated_scores: dict[str, dict] = {}
+        all_individual_reviews = []
+
+        for score_col in available_scores:
+            values = []
+            for review in reviews:
+                val = parse_leading_number(review["scores"].get(score_col))
+                if val is not None:
+                    values.append(val)
+
+            if values:
+                aggregated_scores[score_col] = {
+                    "values": values,
+                    "mean": mean(values),
+                    "median": median(values),
+                    "std": stdev(values) if len(values) > 1 else 0.0,
+                    "count": len(values)
+                }
+            else:
+                aggregated_scores[score_col] = {
+                    "values": [],
+                    "mean": None,
+                    "median": None,
+                    "std": None,
+                    "count": 0
+                }
+
+        # Build individual reviews for inspection
+        for review in reviews:
+            parsed_scores: dict[str, dict] = {}
+            for col in available_scores:
+                raw_val = review["scores"].get(col)
+                raw_str = str(raw_val) if raw_val is not None else ""
+                parsed_scores[col] = {
+                    "raw": raw_str,
+                    "value": parse_leading_number(raw_val),
+                }
+
+            all_individual_reviews.append({
+                "reviewer_id": review["reviewer_id"],
+                "main_review": normalize_text(review["review_text"]),
+                "paper_summary": normalize_text(review["paper_summary"]) or None,
+                "scores": parsed_scores,
+            })
 
         candidates.append({
             "paper_id": str(paper_id).strip(),
             "title": clean_title,
             "abstract": clean_abstract,
-            "pdf_url": normalize_text(pdf_url) or None,
+            "pdf_url": normalize_text(paper_data["pdf_url"]) or None,
             "primary_area": clean_primary_area,
             "decision": clean_decision,
             "year": year_int,
-            "main_review": clean_review,
-            "paper_summary": clean_paper_summary,
-            "scores": parsed_scores,
+            "reviews": {
+                "count": len(all_individual_reviews),
+                "aggregated_scores": aggregated_scores,
+                "all_individual_reviews": all_individual_reviews,
+            }
         })
 
     print(f"Candidates after filtering: {len(candidates)}")
@@ -377,15 +460,25 @@ def export_review_subset(
 
     with open(out_path, "w", encoding="utf-8") as f:
         for rec in selected:
-            stats.review_lengths.append(len(rec["main_review"]))
+            # Track first review length for stats
+            if rec["reviews"]["all_individual_reviews"]:
+                first_review_len = len(rec["reviews"]["all_individual_reviews"][0]["main_review"])
+                stats.review_lengths.append(first_review_len)
+
             if rec["year"] is not None:
                 stats.years.append(rec["year"])
 
-            review_obj: dict = {
-                "main_review": rec["main_review"],
-                "paper_summary": rec["paper_summary"],
+            # Build output record with aggregated reviews
+            reviews_obj: dict = {
+                "count": rec["reviews"]["count"],
             }
-            review_obj.update(rec["scores"])
+
+            # Add aggregated scores
+            for score_col, agg_data in rec["reviews"]["aggregated_scores"].items():
+                reviews_obj[score_col] = agg_data
+
+            # Add all individual reviews for inspection
+            reviews_obj["all_reviews"] = rec["reviews"]["all_individual_reviews"]
 
             output_record = {
                 "paper_id": rec["paper_id"],
@@ -395,7 +488,7 @@ def export_review_subset(
                 "primary_area": rec["primary_area"],
                 "decision": rec["decision"],
                 "year": rec["year"],
-                "review": review_obj,
+                "reviews": reviews_obj,
                 "meta": {
                     "source": "gen_review_sqlite",
                     "filters": meta_filters,
