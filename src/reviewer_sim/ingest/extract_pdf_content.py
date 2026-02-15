@@ -5,11 +5,22 @@ Standalone script to extract PDF content from OpenReview papers.
 This is a SEPARATE step from review generation. Run this ONCE to enrich the dataset,
 then use the enriched JSONL for all subsequent experiments.
 
+EXTRACTION MODES:
+  - sections_optimized (default): Review-focused extraction
+    Prioritizes Methods > Results > Appendix (high signal for review scores)
+    Best for simulating peer review assessment
+  - sections: Legacy mode
+    Abstract > Intro > Conclusion > Methods (backward compatible)
+  - fulltext: Complete paper text
+    Full extraction with simple truncation
+
 Usage:
+    # Recommended: Review-optimized extraction with 10k token budget
     python -m reviewer_sim.ingest.extract_pdf_content \\
         --input outputs/review_subset.jsonl \\
         --output outputs/review_subset_with_pdf.jsonl \\
-        --mode sections \\
+        --mode sections_optimized \\
+        --max-tokens 10000 \\
         --cache data/pdf_cache
 
 Environment variables:
@@ -43,9 +54,9 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["sections", "fulltext"],
-        default="sections",
-        help="Extraction mode: 'sections' (smart) or 'fulltext' (complete)",
+        choices=["sections_optimized", "sections", "fulltext"],
+        default="sections_optimized",
+        help="Extraction mode: 'sections_optimized' (review-focused, methods>results>appendix), 'sections' (legacy), or 'fulltext'",
     )
     parser.add_argument(
         "--cache",
@@ -56,8 +67,8 @@ def main():
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=6000,
-        help="Target token budget",
+        default=10000,
+        help="Target token budget (default 10000 for comprehensive paper content)",
     )
     args = parser.parse_args()
 

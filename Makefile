@@ -13,20 +13,31 @@ export:
 
 # Enrich with LLM-classified primary areas (requires TOGETHER_API_KEY)
 
-# Extract PDF content from papers (separate step)
+# Extract PDF content with review-optimized strategy (10k tokens, methods>results priority)
 extract-pdf:
 	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.extract_pdf_content \
 		--input outputs/review_subset.jsonl \
 		--output outputs/review_subset_with_pdf.jsonl \
-		--mode sections \
+		--mode sections_optimized \
+		--max-tokens 10000 \
 		--cache data/pdf_cache
 
-# Extract PDF content with full-text mode (alternative)
+# Extract PDF content with legacy mode (for backward compatibility)
+extract-pdf-legacy:
+	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.extract_pdf_content \
+		--input outputs/review_subset.jsonl \
+		--output outputs/review_subset_with_pdf_legacy.jsonl \
+		--mode sections \
+		--max-tokens 6000 \
+		--cache data/pdf_cache
+
+# Extract PDF content with full-text mode (alternative: complete paper text)
 extract-pdf-fulltext:
 	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.extract_pdf_content \
 		--input outputs/review_subset.jsonl \
 		--output outputs/review_subset_with_pdf_fulltext.jsonl \
 		--mode fulltext \
+		--max-tokens 10000 \
 		--cache data/pdf_cache
 
 # Run pipeline with PDF content (requires extract-pdf to be run first)

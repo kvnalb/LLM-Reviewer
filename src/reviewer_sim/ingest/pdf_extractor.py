@@ -20,8 +20,8 @@ class PDFExtractor:
     def __init__(
         self,
         cache_dir: Path,
-        extraction_mode: str = "sections",
-        max_tokens: int = 6000,
+        extraction_mode: str = "sections_optimized",
+        max_tokens: int = 10000,
     ):
         """
         Initialize PDF extractor.
@@ -31,9 +31,9 @@ class PDFExtractor:
         cache_dir : Path
             Directory to store downloaded PDFs (e.g., data/pdf_cache/)
         extraction_mode : str
-            "sections" (smart extraction) or "fulltext" (complete text)
+            "sections_optimized" (review-focused), "sections" (legacy), or "fulltext"
         max_tokens : int
-            Target token budget (rough estimate: chars / 4)
+            Target token budget (rough estimate: chars / 4). Default 10000 for full paper.
         """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -123,10 +123,100 @@ class PDFExtractor:
     def _extract_sections(
         self, text: str, title: str, abstract: str, num_pages: int
     ) -> Dict:
-        """Section-aware extraction with priority ordering."""
+        """Review-focused section extraction (methods > results > appendix > intro)."""
         sections = self._detect_sections(text)
 
-        # Priority order: title → abstract → introduction → conclusion → methods
+        if self.extraction_mode == "sections_optimized":
+            return self._extract_sections_optimized(
+                sections, title, abstract, num_pages
+            )
+        else:
+            # Legacy extraction for backward compatibility
+            return self._extract_sections_legacy(
+                sections, title, abstract, num_pages
+            )
+
+    def _extract_sections_optimized(
+        self, sections: Dict[str, str], title: str, abstract: str, num_pages: int
+    ) -> Dict:
+        """Extract sections optimized for peer review simulation.
+
+        Priority: Methods > Results > Appendix > Implementation > Introduction
+        Rationale: Reviewers assess technical rigor (methods), empirical validation (results),
+        and implementation details. Abstract/Intro/Conclusion are marketing language.
+        """
+        # REVIEWER-CENTRIC PRIORITY with token allocations
+        priority_sections = [
+            ("methods", 0.45),
+            ("methodology", 0.45),
+            ("approach", 0.40),
+            ("technical approach", 0.40),
+            ("results", 0.40),
+            ("experiments", 0.40),
+            ("experimental results", 0.35),
+            ("evaluation", 0.35),
+            ("empirical analysis", 0.35),
+            ("appendix", 0.15),
+            ("supplementary material", 0.15),
+            ("implementation", 0.12),
+            ("introduction", 0.05),
+        ]
+
+        combined = f"TITLE: {title}\n\n"
+        used_tokens = 0
+        sections_included = []
+
+        for section_name, token_ratio in priority_sections:
+            if section_name not in sections or not sections[section_name]:
+                continue
+
+            section_text = sections[section_name]
+            max_section_chars = int(token_ratio * self.max_tokens * 4)
+
+            # For results/experiments sections, prioritize numerical data
+            if section_name in ["results", "experiments", "evaluation", "empirical analysis"]:
+                combined += f"\n{section_name.upper()}\n"
+                # Extract lines with numbers (high signal for results)
+                num_lines = [
+                    line
+                    for line in section_text.split("\n")
+                    if any(c.isdigit() for c in line) and len(line.strip()) > 20
+                ]
+                if num_lines:
+                    combined += "\n".join(num_lines[:40]) + "\n"
+                # Add remaining text
+                combined += section_text[:max_section_chars]
+            else:
+                combined += f"\n{section_name.upper()}\n"
+                combined += section_text[:max_section_chars]
+
+            if len(section_text) > max_section_chars:
+                combined += "\n[... truncated ...]\n"
+
+            used_tokens = len(combined) // 4
+            sections_included.append(section_name)
+
+            if used_tokens >= self.max_tokens:
+                break
+
+        return {
+            "full_text": combined,
+            "sections": sections,
+            "token_count": used_tokens,
+            "extraction_metadata": {
+                "success": True,
+                "source": "pdf_sections_optimized",
+                "mode": "sections_optimized",
+                "num_pages": num_pages,
+                "sections_included": sections_included,
+                "error": None,
+            },
+        }
+
+    def _extract_sections_legacy(
+        self, sections: Dict[str, str], title: str, abstract: str, num_pages: int
+    ) -> Dict:
+        """Legacy extraction (for backward compatibility)."""
         combined = ""
         token_budget = self.max_tokens
 

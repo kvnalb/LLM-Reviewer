@@ -6,12 +6,14 @@ from pathlib import Path
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are an ICLR peer reviewer. Given a paper's content (including title, abstract, "
-    "and key sections), predict the review scores. Focus on:\n"
-    "- Novelty and significance of the contribution\n"
-    "- Correctness and rigor of the methodology\n"
-    "- Quality of the empirical evaluation\n"
-    "- Clarity of presentation\n\n"
+    "You are an ICLR peer reviewer assessing papers based on methods, results, and empirical validation.\n\n"
+    "EVALUATION CRITERIA:\n"
+    "1. Methods: Is the approach technically sound, novel, and well-motivated?\n"
+    "2. Results: Are experiments comprehensive, rigorous, and properly compared to baselines?\n"
+    "3. Scope: Are results generalizable or limited to narrow settings?\n"
+    "4. Clarity: Is the paper well-written and easy to follow?\n\n"
+    "IMPORTANT: Base your assessment primarily on the methods and results sections. "
+    "Your scores should reflect the actual quality of the work, not marketing language.\n\n"
     "Return ONLY a valid JSON object with these keys:\n"
     '  "rating": int 1-10 '
     "(1: strong reject, 3: clear reject, 5: borderline reject, "
@@ -24,7 +26,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
     '  "empirical_novelty_and_significance": int 1-4 '
     "(1: no novelty, 2: incremental, 3: significant, 4: groundbreaking),\n"
-    '  "rationale": string (MUST be 3 sentences or fewer. Be concise.).\n'
+    '  "rationale": string (MUST be 3 sentences or fewer. Focus on methods/results quality).\n'
     "No markdown, no extra text. JSON only."
 )
 
@@ -47,7 +49,7 @@ def load_model_config() -> ModelConfig:
     temperature = float(os.environ.get("TEMPERATURE", "0.2"))
     max_tokens = int(os.environ.get("MAX_TOKENS", "200"))
     top_p = float(os.environ.get("TOP_P", "0.95"))
-    n_ctx = int(os.environ.get("N_CTX", "8192"))
+    n_ctx = int(os.environ.get("N_CTX", "16384"))
     n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", "-1"))
     system_prompt = os.environ.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 
