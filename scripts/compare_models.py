@@ -5,7 +5,7 @@ and generates comparison reports in multiple formats:
   - Markdown table (human-readable)
   - CSV file (for import to Excel/analysis)
   - HTML report with interactive table
-  - PNG/PDF charts (matplotlib visualizations)
+  - PNG charts (matplotlib visualizations)
 
 Output goes to analysis/comparison_TIMESTAMP/ (gitignored folder)
 
@@ -29,7 +29,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import re
 from datetime import datetime
@@ -72,20 +71,24 @@ def compute_summary(path: Path) -> dict:
     """Compute aggregate metrics for one results file."""
     rows = _read_jsonl(path)
 
-    dim_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
-    all_mae: list[float] = []
+    dim_norm_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
+    all_nmae: list[float] = []
+    all_spearman: list[float] = []
     agree_count = 0
     agree_total = 0
 
     for row in rows:
         m = row.get("metrics", {}) or {}
         for dim in SCORE_DIMENSIONS:
-            val = m.get(f"{dim}_abs_err")
+            val = m.get(f"{dim}_norm_err")
             if val is not None:
-                dim_errors[dim].append(float(val))
-        mae_val = m.get("mae")
-        if mae_val is not None:
-            all_mae.append(float(mae_val))
+                dim_norm_errors[dim].append(float(val))
+        nmae_val = m.get("nmae")
+        if nmae_val is not None:
+            all_nmae.append(float(nmae_val))
+        sc = m.get("spearman_corr")
+        if sc is not None:
+            all_spearman.append(float(sc))
         da = m.get("decision_agree")
         if da is not None:
             agree_total += 1
@@ -94,56 +97,49 @@ def compute_summary(path: Path) -> dict:
 
     return {
         "n": len(rows),
-        "n_processed": len(all_mae),
-        "coverage_pct": (len(all_mae) / len(rows) * 100) if rows else 0.0,
-        "mae_mean": mean(all_mae) if all_mae else None,
-        "mae_median": sorted(all_mae)[len(all_mae) // 2] if all_mae else None,
+        "n_processed": len(all_nmae),
+        "coverage_pct": (len(all_nmae) / len(rows) * 100) if rows else 0.0,
+        "nmae_mean": mean(all_nmae) if all_nmae else None,
+        "spearman_mean": mean(all_spearman) if all_spearman else None,
         "decision_agree_pct": (
             agree_count / agree_total * 100 if agree_total else None
         ),
         "agree_count": agree_count,
         "agree_total": agree_total,
-        "dim_mae": {
+        "dim_nmae": {
             dim: mean(vals) if vals else None
-            for dim, vals in dim_errors.items()
+            for dim, vals in dim_norm_errors.items()
         },
     }
 
 
 def generate_markdown_table(entries: list[tuple[str, dict]]) -> str:
     """Generate a markdown comparison table."""
-    # Sort by MAE ascending (lower is better); None goes to bottom
     entries.sort(
-        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+        key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
     header_dims = " | ".join(f"{DIM_SHORT[d]}" for d in SCORE_DIMENSIONS)
     header = (
-        f"| Rank | Model | MAE | Cov% | DecAgr | {header_dims} | N |\n"
-        f"|------|-------|-----|------|--------|{'-|-'.join(['---'] * len(SCORE_DIMENSIONS))}|---|"
+        f"| Rank | Model | NMAE | Spearman | Cov% | DecAgr | {header_dims} | N |\n"
+        f"|------|-------|------|----------|------|--------|{'-|-'.join(['---'] * len(SCORE_DIMENSIONS))}|---|"
     )
 
     rows = []
     for rank, (label, summary) in enumerate(entries, 1):
-        mae_str = (
-            f"{summary['mae_mean']:.3f}"
-            if summary["mae_mean"] is not None
-            else "n/a"
-        )
+        nmae_str = f"{summary['nmae_mean']:.3f}" if summary["nmae_mean"] is not None else "n/a"
+        spear_str = f"{summary['spearman_mean']:.3f}" if summary["spearman_mean"] is not None else "n/a"
         cov_str = f"{summary['coverage_pct']:.0f}%"
-        if summary["decision_agree_pct"] is not None:
-            agree_str = f"{summary['decision_agree_pct']:.1f}%"
-        else:
-            agree_str = "n/a"
+        agree_str = f"{summary['decision_agree_pct']:.1f}%" if summary["decision_agree_pct"] is not None else "n/a"
 
-        dim_strs = []
-        for dim in SCORE_DIMENSIONS:
-            v = summary["dim_mae"].get(dim)
-            dim_strs.append(f"{v:.2f}" if v is not None else "n/a")
+        dim_strs = [
+            f"{summary['dim_nmae'].get(dim):.3f}" if summary["dim_nmae"].get(dim) is not None else "n/a"
+            for dim in SCORE_DIMENSIONS
+        ]
         dim_cols = " | ".join(dim_strs)
 
         rows.append(
-            f"| {rank} | {label} | {mae_str} | {cov_str} | {agree_str} | {dim_cols} | {summary['n']} |"
+            f"| {rank} | {label} | {nmae_str} | {spear_str} | {cov_str} | {agree_str} | {dim_cols} | {summary['n']} |"
         )
 
     return f"# Model Comparison Report\n\n{header}\n" + "\n".join(rows) + "\n"
@@ -151,13 +147,12 @@ def generate_markdown_table(entries: list[tuple[str, dict]]) -> str:
 
 def generate_csv(entries: list[tuple[str, dict]]) -> str:
     """Generate CSV format comparison table."""
-    # Sort by MAE
     entries.sort(
-        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+        key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
     lines = []
-    header = ["Rank", "Model", "N", "Coverage%", "MAE", "Decision_Agree%"]
+    header = ["Rank", "Model", "N", "Coverage%", "NMAE", "Spearman", "Decision_Agree%"]
     header.extend(SCORE_DIMENSIONS)
     lines.append(",".join(header))
 
@@ -167,11 +162,12 @@ def generate_csv(entries: list[tuple[str, dict]]) -> str:
             label,
             str(summary["n"]),
             f"{summary['coverage_pct']:.1f}",
-            f"{summary['mae_mean']:.3f}" if summary["mae_mean"] else "",
+            f"{summary['nmae_mean']:.3f}" if summary["nmae_mean"] else "",
+            f"{summary['spearman_mean']:.3f}" if summary["spearman_mean"] else "",
             f"{summary['decision_agree_pct']:.1f}" if summary["decision_agree_pct"] else "",
         ]
         for dim in SCORE_DIMENSIONS:
-            v = summary["dim_mae"].get(dim)
+            v = summary["dim_nmae"].get(dim)
             row.append(f"{v:.3f}" if v else "")
         lines.append(",".join(row))
 
@@ -180,9 +176,8 @@ def generate_csv(entries: list[tuple[str, dict]]) -> str:
 
 def generate_html_report(entries: list[tuple[str, dict]]) -> str:
     """Generate HTML report with sortable table."""
-    # Sort by MAE
     entries.sort(
-        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+        key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
     html = """<!DOCTYPE html>
@@ -214,9 +209,7 @@ def generate_html_report(entries: list[tuple[str, dict]]) -> str:
             padding: 10px 12px;
             border-bottom: 1px solid #ddd;
         }
-        tr:hover {
-            background-color: #f9f9f9;
-        }
+        tr:hover { background-color: #f9f9f9; }
         .rank-1 { background-color: #fff3cd; font-weight: bold; }
         .rank-2 { background-color: #fff8dc; }
         .metric-good { color: #28a745; }
@@ -227,6 +220,7 @@ def generate_html_report(entries: list[tuple[str, dict]]) -> str:
 </head>
 <body>
     <h1>Model Comparison Report</h1>
+    <p>Primary metric: NMAE (Normalized MAE, lower is better). Good &lt;0.15, Fair &lt;0.25, Poor &ge;0.25</p>
     <table>
         <thead>
             <tr>
@@ -234,7 +228,8 @@ def generate_html_report(entries: list[tuple[str, dict]]) -> str:
                 <th>Model</th>
                 <th>N</th>
                 <th>Coverage</th>
-                <th>MAE</th>
+                <th>NMAE</th>
+                <th>Spearman</th>
                 <th>Decision Agree</th>
 """
 
@@ -254,25 +249,22 @@ def generate_html_report(entries: list[tuple[str, dict]]) -> str:
         html += f"                <td>{summary['n']}</td>\n"
         html += f"                <td>{summary['coverage_pct']:.0f}%</td>\n"
 
-        mae = summary["mae_mean"]
-        mae_class = ""
-        if mae:
-            if mae < 0.5:
-                mae_class = "metric-good"
-            elif mae < 1.0:
-                mae_class = "metric-fair"
-            else:
-                mae_class = "metric-poor"
-        html += f'                <td class="{mae_class}">{mae:.3f if mae else ""}</td>\n'
+        nmae = summary["nmae_mean"]
+        if nmae is not None:
+            nmae_class = "metric-good" if nmae < 0.15 else "metric-fair" if nmae < 0.25 else "metric-poor"
+            html += f'                <td class="{nmae_class}">{nmae:.3f}</td>\n'
+        else:
+            html += "                <td>n/a</td>\n"
+
+        spear = summary["spearman_mean"]
+        html += f"                <td>{f'{spear:.3f}' if spear is not None else 'n/a'}</td>\n"
 
         agree = summary["decision_agree_pct"]
-        agree_str = f"{agree:.1f}%" if agree else ""
-        html += f"                <td>{agree_str}</td>\n"
+        html += f"                <td>{f'{agree:.1f}%' if agree is not None else 'n/a'}</td>\n"
 
         for dim in SCORE_DIMENSIONS:
-            v = summary["dim_mae"].get(dim)
-            val_str = f"{v:.3f}" if v else ""
-            html += f"                <td>{val_str}</td>\n"
+            v = summary["dim_nmae"].get(dim)
+            html += f"                <td>{f'{v:.3f}' if v is not None else ''}</td>\n"
 
         html += "            </tr>\n"
 
@@ -289,29 +281,27 @@ def generate_charts(entries: list[tuple[str, dict]], output_dir: Path) -> None:
     """Generate matplotlib charts comparing models."""
     try:
         import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
     except ImportError:
-        print("⚠️  matplotlib not installed, skipping chart generation")
+        print("matplotlib not installed, skipping chart generation")
         return
 
-    # Sort by MAE
     entries.sort(
-        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+        key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
     models = [label for label, _ in entries]
-    mae_values = [summary["mae_mean"] for _, summary in entries]
+    nmae_values = [summary["nmae_mean"] for _, summary in entries]
     decision_agree = [summary["decision_agree_pct"] for _, summary in entries]
 
-    # Chart 1: MAE Comparison
+    # Chart 1: NMAE Comparison
     fig, ax = plt.subplots(figsize=(10, 6))
     colors = ["#28a745" if i == 0 else "#007bff" for i in range(len(models))]
-    ax.barh(models, mae_values, color=colors)
-    ax.set_xlabel("Mean Absolute Error (lower is better)", fontsize=12)
-    ax.set_title("Model Comparison: MAE", fontsize=14, fontweight="bold")
+    ax.barh(models, nmae_values, color=colors)
+    ax.set_xlabel("NMAE — Normalized MAE (lower is better)", fontsize=12)
+    ax.set_title("Model Comparison: NMAE", fontsize=14, fontweight="bold")
     ax.invert_yaxis()
     plt.tight_layout()
-    plt.savefig(output_dir / "mae_comparison.png", dpi=150, bbox_inches="tight")
+    plt.savefig(output_dir / "nmae_comparison.png", dpi=150, bbox_inches="tight")
     plt.close()
 
     # Chart 2: Decision Agreement
@@ -326,51 +316,44 @@ def generate_charts(entries: list[tuple[str, dict]], output_dir: Path) -> None:
     plt.savefig(output_dir / "decision_agreement.png", dpi=150, bbox_inches="tight")
     plt.close()
 
-    print(f"✓ Charts generated:")
-    print(f"  - {output_dir / 'mae_comparison.png'}")
+    print(f"Charts generated:")
+    print(f"  - {output_dir / 'nmae_comparison.png'}")
     print(f"  - {output_dir / 'decision_agreement.png'}")
 
 
 def print_comparison_table(entries: list[tuple[str, dict]]) -> None:
     """Print a sorted comparison table to stdout."""
-    # Sort by MAE ascending (lower is better); None goes to bottom
     entries.sort(
-        key=lambda e: e[1]["mae_mean"] if e[1]["mae_mean"] is not None else 999
+        key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
     header_dims = "  ".join(f"{DIM_SHORT[d]:>7s}" for d in SCORE_DIMENSIONS)
     header = (
-        f"{'Rank':>4s}  {'Model':<28s}  {'MAE':>6s}  {'Cov%':>5s}  {'DecAgr':>7s}  "
+        f"{'Rank':>4s}  {'Model':<28s}  {'NMAE':>6s}  {'Spear':>6s}  {'Cov%':>5s}  {'DecAgr':>7s}  "
         f"{header_dims}  {'N':>4s}"
     )
     sep = "-" * len(header)
 
     print(f"\n{sep}")
-    print("  MODEL COMPARISON  (sorted by overall MAE, lower is better)")
+    print("  MODEL COMPARISON  (sorted by NMAE, lower is better)")
     print(sep)
     print(header)
     print(sep)
 
     for rank, (label, summary) in enumerate(entries, 1):
-        mae_str = (
-            f"{summary['mae_mean']:.3f}"
-            if summary["mae_mean"] is not None
-            else "n/a"
-        )
+        nmae_str = f"{summary['nmae_mean']:.3f}" if summary["nmae_mean"] is not None else "n/a"
+        spear_str = f"{summary['spearman_mean']:.3f}" if summary["spearman_mean"] is not None else "n/a"
         cov_str = f"{summary['coverage_pct']:.0f}%"
-        if summary["decision_agree_pct"] is not None:
-            agree_str = f"{summary['decision_agree_pct']:.1f}%"
-        else:
-            agree_str = "n/a"
+        agree_str = f"{summary['decision_agree_pct']:.1f}%" if summary["decision_agree_pct"] is not None else "n/a"
 
-        dim_strs = []
-        for dim in SCORE_DIMENSIONS:
-            v = summary["dim_mae"].get(dim)
-            dim_strs.append(f"{v:.2f}" if v is not None else "n/a")
+        dim_strs = [
+            f"{summary['dim_nmae'].get(dim):.3f}" if summary["dim_nmae"].get(dim) is not None else "n/a"
+            for dim in SCORE_DIMENSIONS
+        ]
         dim_cols = "  ".join(f"{s:>7s}" for s in dim_strs)
 
         print(
-            f"{rank:>4d}  {label:<28s}  {mae_str:>6s}  {cov_str:>5s}  {agree_str:>7s}  "
+            f"{rank:>4d}  {label:<28s}  {nmae_str:>6s}  {spear_str:>6s}  {cov_str:>5s}  {agree_str:>7s}  "
             f"{dim_cols}  {summary['n']:>4d}"
         )
 
@@ -408,7 +391,6 @@ def main() -> None:
     if args.paths:
         paths = args.paths
     else:
-        # Auto-discover
         paths = sorted(args.output_dir.glob("results_*.jsonl"))
         if not paths:
             print(f"No results_*.jsonl files found in {args.output_dir}/")
@@ -427,34 +409,28 @@ def main() -> None:
 
     print_comparison_table(entries)
 
-    # Create timestamped report directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_dir = args.report_dir / f"comparison_{timestamp}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate reports in multiple formats
     print(f"\nGenerating reports in: {report_dir}/")
     print()
 
-    # Markdown report
     markdown = generate_markdown_table(entries)
     with open(report_dir / "report.md", "w", encoding="utf-8") as f:
         f.write(markdown)
-    print(f"✓ Markdown report: report.md")
+    print(f"Markdown report: report.md")
 
-    # CSV report
     csv_content = generate_csv(entries)
     with open(report_dir / "comparison.csv", "w", encoding="utf-8") as f:
         f.write(csv_content)
-    print(f"✓ CSV export: comparison.csv")
+    print(f"CSV export: comparison.csv")
 
-    # HTML report
     html_content = generate_html_report(entries)
     with open(report_dir / "report.html", "w", encoding="utf-8") as f:
         f.write(html_content)
-    print(f"✓ HTML report: report.html")
+    print(f"HTML report: report.html")
 
-    # Charts
     generate_charts(entries, report_dir)
 
     print()

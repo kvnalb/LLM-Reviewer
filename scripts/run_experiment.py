@@ -28,10 +28,17 @@ from typing import List
 # NOTE: Prefer serverless models (no dedicated endpoint required)
 # ---------------------------------------------------------------------------
 MODELS: List[tuple[str, str]] = [
-    ("openai/gpt-oss-20b", "GPT-OSS-20B"),
-    ("deepseek-ai/deepseek-v3.1", "DeepSeek-V3.1"),
-    ("meta-llama/Llama-3-70b-chat-hf", "Llama-3-70B"),
-    ("mistralai/Mixtral-8x7B-Instruct-v0.1", "Mixtral-8x7B"),
+    # Dense — scale progression
+    ("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "Llama-3.1-8B"),        # cheapest baseline
+    ("openai/gpt-oss-20b",                           "GPT-OSS-20B"),          # current default, anchor
+    ("mistralai/Mistral-Small-24B-Instruct-2501",    "Mistral-Small-24B"),    # different training lineage
+    ("meta-llama/Llama-3.3-70B-Instruct-Turbo",      "Llama-3.3-70B"),        # well-benchmarked mid-tier
+    # MoE — active-param efficiency at scale
+    ("meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama4-Maverick"), # 17B active, 128 experts
+    ("Qwen/Qwen3-235B-A22B-Instruct-2507-tput",      "Qwen3-235B"),           # 22B active, Alibaba flagship
+    ("deepseek-ai/DeepSeek-V3.1",                    "DeepSeek-V3.1"),        # 37B active, frontier non-thinking
+    # Reasoning — CoT vs standard on same base
+    ("deepseek-ai/DeepSeek-R1",                      "DeepSeek-R1"),          # 37B active, thinking model
 ]
 
 INPUT_JSONL = "outputs/review_subset.jsonl"
@@ -90,20 +97,24 @@ def _compute_summary(path: Path) -> dict:
     """Compute aggregate metrics for one results file."""
     rows = _read_jsonl(path)
 
-    dim_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
-    all_mae: list[float] = []
+    dim_norm_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
+    all_nmae: list[float] = []
+    all_spearman: list[float] = []
     agree_count = 0
     agree_total = 0
 
     for row in rows:
         m = row.get("metrics", {}) or {}
         for dim in SCORE_DIMENSIONS:
-            val = m.get(f"{dim}_abs_err")
+            val = m.get(f"{dim}_norm_err")
             if val is not None:
-                dim_errors[dim].append(float(val))
-        mae_val = m.get("mae")
-        if mae_val is not None:
-            all_mae.append(float(mae_val))
+                dim_norm_errors[dim].append(float(val))
+        nmae_val = m.get("nmae")
+        if nmae_val is not None:
+            all_nmae.append(float(nmae_val))
+        sc = m.get("spearman_corr")
+        if sc is not None:
+            all_spearman.append(float(sc))
         da = m.get("decision_agree")
         if da is not None:
             agree_total += 1
@@ -112,16 +123,16 @@ def _compute_summary(path: Path) -> dict:
 
     return {
         "n": len(rows),
-        "mae_mean": mean(all_mae) if all_mae else None,
-        "mae_median": sorted(all_mae)[len(all_mae) // 2] if all_mae else None,
+        "nmae_mean": mean(all_nmae) if all_nmae else None,
+        "spearman_mean": mean(all_spearman) if all_spearman else None,
         "decision_agree_pct": (
             agree_count / agree_total * 100 if agree_total else None
         ),
         "agree_count": agree_count,
         "agree_total": agree_total,
-        "dim_mae": {
+        "dim_nmae": {
             dim: mean(vals) if vals else None
-            for dim, vals in dim_errors.items()
+            for dim, vals in dim_norm_errors.items()
         },
     }
 
@@ -131,8 +142,8 @@ def _print_comparison_table(results: list[tuple[str, str, dict]]) -> None:
 
     results: list of (model_id, label, summary_dict)
     """
-    # Sort by MAE ascending (lower is better); None goes to bottom
-    results.sort(key=lambda r: r[2]["mae_mean"] if r[2]["mae_mean"] is not None else 999)
+    # Sort by NMAE ascending (lower is better); None goes to bottom
+    results.sort(key=lambda r: r[2]["nmae_mean"] if r[2]["nmae_mean"] is not None else 999)
 
     dim_short = {
         "rating": "Rating",
@@ -143,29 +154,27 @@ def _print_comparison_table(results: list[tuple[str, str, dict]]) -> None:
     }
 
     header_dims = "  ".join(f"{dim_short[d]:>7s}" for d in SCORE_DIMENSIONS)
-    header = f"{'Rank':>4s}  {'Model':<22s}  {'MAE':>6s}  {'DecAgr':>7s}  {header_dims}  {'N':>4s}"
+    header = f"{'Rank':>4s}  {'Model':<22s}  {'NMAE':>6s}  {'Spear':>6s}  {'DecAgr':>7s}  {header_dims}  {'N':>4s}"
     sep = "-" * len(header)
 
     print(f"\n{sep}")
-    print("  EXPERIMENT RESULTS  (sorted by overall MAE, lower is better)")
+    print("  EXPERIMENT RESULTS  (sorted by NMAE, lower is better)")
     print(sep)
     print(header)
     print(sep)
 
     for rank, (model_id, label, summary) in enumerate(results, 1):
-        mae_str = f"{summary['mae_mean']:.3f}" if summary["mae_mean"] is not None else "n/a"
-        if summary["decision_agree_pct"] is not None:
-            agree_str = f"{summary['decision_agree_pct']:.1f}%"
-        else:
-            agree_str = "n/a"
+        nmae_str = f"{summary['nmae_mean']:.3f}" if summary["nmae_mean"] is not None else "n/a"
+        spear_str = f"{summary['spearman_mean']:.3f}" if summary["spearman_mean"] is not None else "n/a"
+        agree_str = f"{summary['decision_agree_pct']:.1f}%" if summary["decision_agree_pct"] is not None else "n/a"
 
         dim_strs = []
         for dim in SCORE_DIMENSIONS:
-            v = summary["dim_mae"].get(dim)
-            dim_strs.append(f"{v:.2f}" if v is not None else "n/a")
+            v = summary["dim_nmae"].get(dim)
+            dim_strs.append(f"{v:.3f}" if v is not None else "n/a")
         dim_cols = "  ".join(f"{s:>7s}" for s in dim_strs)
 
-        print(f"{rank:>4d}  {label:<22s}  {mae_str:>6s}  {agree_str:>7s}  {dim_cols}  {summary['n']:>4d}")
+        print(f"{rank:>4d}  {label:<22s}  {nmae_str:>6s}  {spear_str:>6s}  {agree_str:>7s}  {dim_cols}  {summary['n']:>4d}")
 
     print(sep)
     print()
@@ -224,7 +233,7 @@ def main() -> None:
             "results_file": str(path),
             **s,
         })
-    summary_data.sort(key=lambda r: r["mae_mean"] if r["mae_mean"] is not None else 999)
+    summary_data.sort(key=lambda r: r["nmae_mean"] if r["nmae_mean"] is not None else 999)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False)
     print(f"Machine-readable summary written to: {summary_path}")
