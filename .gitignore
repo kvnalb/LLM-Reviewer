@@ -6,6 +6,14 @@ outputs/
 analysis/
 data/private/
 data/*.db
+data/pdf_cache/
+data/processed/
 .DS_Store
 models/
 scripts/plots/
+scripts/exploratory/
+.planning/
+.cursorrules
+.Rhistory
+*.png
+*.jpg
