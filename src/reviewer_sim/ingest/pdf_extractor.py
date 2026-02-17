@@ -69,7 +69,7 @@ class PDFExtractor:
             num_pages = self._get_page_count(pdf_path)
 
             # Process based on mode
-            if self.extraction_mode == "sections":
+            if self.extraction_mode in ("sections", "sections_optimized"):
                 return self._extract_sections(raw_text, title, abstract, num_pages)
             else:  # fulltext
                 return self._extract_fulltext(raw_text, title, abstract, num_pages)
