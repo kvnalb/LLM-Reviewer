@@ -87,6 +87,13 @@ run-together:
 	OUTPUT_JSONL=$(TOGETHER_OUTPUT_JSONL) \
 	python -m reviewer_sim.run
 
+# Smoke test: run full pipeline on 5 papers
+# mock mode (no API key):  make test-pipeline
+# Together AI:             TOGETHER_API_KEY=xxx make test-pipeline
+# skip PDF extraction:     SKIP_PDF=1 make test-pipeline
+test-pipeline:
+	bash scripts/test_pipeline.sh
+
 # Run tests
 test:
 	PYTHONPATH=$(PYTHONPATH) pytest tests/ -v

@@ -218,6 +218,7 @@ make summarize OUTPUT_JSONL=outputs/results.jsonl
 | `make experiment` | Batch run across multiple models (requires `TOGETHER_API_KEY`) |
 | `make compare` | Compare all `outputs/results_*.jsonl` files |
 | `make summarize` | Summarize a single results file |
+| `make test-pipeline` | Smoke test: full pipeline on 5 papers (mock or Together AI) |
 | `make test` | Run pytest tests |
 | `make test-imports` | Verify all modules import correctly |
 
