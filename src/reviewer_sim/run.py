@@ -10,8 +10,9 @@ Usage:
 Environment variables:
     INPUT_JSONL: Input file path (default: outputs/review_subset.jsonl)
     OUTPUT_JSONL: Output file path (default: outputs/results.jsonl)
-    MODEL_PROVIDER: mock or llamacpp (default: mock)
-    MODEL_PATH: Path to GGUF model (required for llamacpp)
+    MODEL_PROVIDER: mock, llamacpp, or together (default: mock)
+    MODEL_PATH: Path to GGUF model (llamacpp) or Together model ID (together)
+    TOGETHER_API_KEY: Together AI API key (required for together provider)
 """
 
 import json
@@ -27,16 +28,14 @@ from reviewer_sim.utils.config import load_model_config
 
 
 def main() -> None:
-    # Load config and create generator ONCE
     config = load_model_config()
     generator = get_generator(config)
 
-    # Print startup info
     print(f"Provider: {config.provider}")
     if config.model_path:
         print(f"Model path: {config.model_path}")
 
-    input_path = Path(os.environ.get("INPUT_JSONL", "data/processed/review_subset.jsonl"))
+    input_path = Path(os.environ.get("INPUT_JSONL", "outputs/review_subset.jsonl"))
     output_path = Path(os.environ.get("OUTPUT_JSONL", "outputs/results.jsonl"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
