@@ -27,18 +27,21 @@ from typing import List
 # Each entry: (together_model_id, short_label_for_display)
 # NOTE: Prefer serverless models (no dedicated endpoint required)
 # ---------------------------------------------------------------------------
-MODELS: List[tuple[str, str]] = [
+# Each entry: (together_model_id, short_label, max_tokens)
+# max_tokens=None uses the config default (800). Reasoning models need much more
+# because <think> blocks consume ~1000-2000 tokens before the JSON output.
+MODELS: List[tuple[str, str, int | None]] = [
     # Dense — scale progression
-    ("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "Llama-3.1-8B"),        # cheapest baseline
-    ("openai/gpt-oss-20b",                           "GPT-OSS-20B"),          # current default, anchor
-    ("mistralai/Mistral-Small-24B-Instruct-2501",    "Mistral-Small-24B"),    # different training lineage
-    ("meta-llama/Llama-3.3-70B-Instruct-Turbo",      "Llama-3.3-70B"),        # well-benchmarked mid-tier
+    ("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "Llama-3.1-8B",    None),
+    ("openai/gpt-oss-20b",                           "GPT-OSS-20B",     None),
+    ("mistralai/Mistral-Small-24B-Instruct-2501",    "Mistral-Small-24B", None),
+    ("meta-llama/Llama-3.3-70B-Instruct-Turbo",      "Llama-3.3-70B",   None),
     # MoE — active-param efficiency at scale
-    ("meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama4-Maverick"), # 17B active, 128 experts
-    ("Qwen/Qwen3-235B-A22B-Instruct-2507-tput",      "Qwen3-235B"),           # 22B active, Alibaba flagship
-    ("deepseek-ai/DeepSeek-V3.1",                    "DeepSeek-V3.1"),        # 37B active, frontier non-thinking
-    # Reasoning — CoT vs standard on same base
-    ("deepseek-ai/DeepSeek-R1",                      "DeepSeek-R1"),          # 37B active, thinking model
+    ("meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama4-Maverick", None),
+    ("Qwen/Qwen3-235B-A22B-Instruct-2507-tput",      "Qwen3-235B",      None),
+    ("deepseek-ai/DeepSeek-V3.1",                    "DeepSeek-V3.1",   None),
+    # Reasoning — needs extra tokens for <think> block (~1500) + JSON output (~400)
+    ("deepseek-ai/DeepSeek-R1",                      "DeepSeek-R1",     4000),
 ]
 
 INPUT_JSONL = "outputs/review_subset.jsonl"
@@ -58,7 +61,7 @@ def _slugify(model_id: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", model_id).strip("_").lower()
 
 
-def _run_pipeline(model_id: str, output_path: Path) -> bool:
+def _run_pipeline(model_id: str, output_path: Path, max_tokens: int | None = None) -> bool:
     """Run reviewer_sim.run for one model. Returns True on success."""
     env = {
         **os.environ,
@@ -68,6 +71,8 @@ def _run_pipeline(model_id: str, output_path: Path) -> bool:
         "OUTPUT_JSONL": str(output_path),
         "PYTHONPATH": os.environ.get("PYTHONPATH", "src"),
     }
+    if max_tokens is not None:
+        env["MAX_TOKENS"] = str(max_tokens)
     print(f"\n{'='*60}")
     print(f"  Running: {model_id}")
     print(f"  Output:  {output_path}")
@@ -198,10 +203,10 @@ def main() -> None:
     completed: list[tuple[str, str, Path]] = []
     failed: list[tuple[str, str]] = []
 
-    for model_id, label in MODELS:
+    for model_id, label, max_tokens in MODELS:
         slug = _slugify(model_id)
         output_path = OUTPUT_DIR / f"results_{slug}.jsonl"
-        ok = _run_pipeline(model_id, output_path)
+        ok = _run_pipeline(model_id, output_path, max_tokens=max_tokens)
         if ok and output_path.exists():
             completed.append((model_id, label, output_path))
         else:

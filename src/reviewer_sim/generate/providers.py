@@ -351,6 +351,9 @@ class TogetherGenerator:
         """Parse JSON from Together API response, reusing LlamaCpp logic."""
         content = content.strip()
 
+        # Strip <think>...</think> blocks (DeepSeek-R1 and other reasoning models)
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
         parsed = LlamaCppGenerator._try_parse_json(content)
         if parsed is not None:
             return LlamaCppGenerator._normalise_scores(parsed)
