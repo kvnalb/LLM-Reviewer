@@ -1,4 +1,4 @@
-"""Summarise reviewer_sim results JSONL (numerical eval metrics).
+"""Summarise reviewer_sim results JSONL.
 
 Usage:
     python scripts/summarize_results.py outputs/results.jsonl
@@ -33,9 +33,10 @@ def main() -> None:
     rows = _read_jsonl(args.path)
     total = len(rows)
 
-    # Collect per-dimension errors
-    dim_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
-    all_mae: list[float] = []
+    dim_norm_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
+    all_nmae: list[float] = []
+    all_rmse: list[float] = []
+    all_spearman: list[float] = []
     agree_count = 0
     agree_total = 0
 
@@ -43,13 +44,21 @@ def main() -> None:
         m = row.get("metrics", {}) or {}
 
         for dim in SCORE_DIMENSIONS:
-            val = m.get(f"{dim}_abs_err")
+            val = m.get(f"{dim}_norm_err")
             if val is not None:
-                dim_errors[dim].append(float(val))
+                dim_norm_errors[dim].append(float(val))
 
-        mae = m.get("mae")
-        if mae is not None:
-            all_mae.append(float(mae))
+        nmae = m.get("nmae")
+        if nmae is not None:
+            all_nmae.append(float(nmae))
+
+        rmse = m.get("rmse")
+        if rmse is not None:
+            all_rmse.append(float(rmse))
+
+        sc = m.get("spearman_corr")
+        if sc is not None:
+            all_spearman.append(float(sc))
 
         da = m.get("decision_agree")
         if da is not None:
@@ -57,31 +66,31 @@ def main() -> None:
             if da:
                 agree_count += 1
 
-    print(f"Total rows: {total}")
-    print(f"Processed:  {len(all_mae)}")
+    print(f"Total:    {total}")
+    print(f"Scored:   {len(all_nmae)}")
     if total > 0:
-        coverage = len(all_mae) / total * 100
-        print(f"Coverage:   {coverage:.1f}%")
+        print(f"Coverage: {len(all_nmae) / total * 100:.1f}%")
     print()
 
-    print("Per-dimension MAE:")
+    print("Per-dimension NMAE (normalized by scale range, lower is better):")
     for dim in SCORE_DIMENSIONS:
-        vals = dim_errors[dim]
+        vals = dim_norm_errors[dim]
         if vals:
-            print(f"  {dim:45s}  mean={mean(vals):.3f}  median={median(vals):.3f}  n={len(vals)}")
+            print(f"  {dim:45s}  mean={mean(vals):.3f}  median={median(vals):.3f}")
         else:
             print(f"  {dim:45s}  n/a")
 
-    if all_mae:
-        print(f"\nOverall MAE:  mean={mean(all_mae):.3f}  median={median(all_mae):.3f}  n={len(all_mae)}")
-    else:
-        print("\nOverall MAE:  n/a")
-
+    print()
+    if all_nmae:
+        print(f"NMAE (primary):        mean={mean(all_nmae):.3f}  median={median(all_nmae):.3f}")
+    if all_rmse:
+        print(f"RMSE:                  mean={mean(all_rmse):.3f}  median={median(all_rmse):.3f}")
+    if all_spearman:
+        print(f"Spearman correlation:  mean={mean(all_spearman):.3f}  median={median(all_spearman):.3f}")
     if agree_total:
-        pct = agree_count / agree_total * 100
-        print(f"Decision agreement: {pct:.1f}%  ({agree_count}/{agree_total})")
+        print(f"Decision agreement:    {agree_count / agree_total * 100:.1f}%  ({agree_count}/{agree_total})")
     else:
-        print("Decision agreement: n/a")
+        print("Decision agreement:    n/a")
 
 
 if __name__ == "__main__":
