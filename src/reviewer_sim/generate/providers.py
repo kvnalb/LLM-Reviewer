@@ -203,6 +203,22 @@ Now provide the JSON scores for the paper above:"""
             except json.JSONDecodeError:
                 pass
 
+        # Last resort: regex-extract individual integer score fields.
+        # Handles models (e.g. Qwen3) that emit an unquoted rationale string,
+        # making the whole JSON unparseable via standard json.loads.
+        int_dims = [d for d in SCORE_DIMENSIONS]
+        extracted: Dict = {}
+        for dim in int_dims:
+            m = re.search(rf'"{dim}"\s*:\s*(\d+)', content)
+            if m:
+                extracted[dim] = int(m.group(1))
+        if extracted:
+            # Also try to capture rationale/text as raw string (best-effort)
+            rat_m = re.search(r'"rationale"\s*:\s*(.+?)(?=,\s*"|\s*\})', content, re.DOTALL)
+            if rat_m:
+                extracted["text"] = rat_m.group(1).strip().strip('"')
+            return extracted
+
         return None
 
     @staticmethod

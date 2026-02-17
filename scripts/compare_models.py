@@ -289,9 +289,11 @@ def generate_charts(entries: list[tuple[str, dict]], output_dir: Path) -> None:
         key=lambda e: e[1]["nmae_mean"] if e[1]["nmae_mean"] is not None else 999
     )
 
-    models = [label for label, _ in entries]
-    nmae_values = [summary["nmae_mean"] for _, summary in entries]
-    decision_agree = [summary["decision_agree_pct"] for _, summary in entries]
+    # Filter out entries with no NMAE data for charts
+    valid_entries = [(label, summary) for label, summary in entries if summary["nmae_mean"] is not None]
+    models = [label for label, _ in valid_entries]
+    nmae_values = [summary["nmae_mean"] for _, summary in valid_entries]
+    decision_agree = [summary["decision_agree_pct"] for _, summary in valid_entries]
 
     # Chart 1: NMAE Comparison
     fig, ax = plt.subplots(figsize=(10, 6))
