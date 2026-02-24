@@ -31,7 +31,8 @@ class MockGenerator:
         abstract = example.get("abstract", "") or ""
 
         profile = example.get("reviewer_profile", {}) or {}
-        expertise = profile.get("expertise", "general")
+        # Use primary_area_llm if available, otherwise fall back to profile expertise
+        expertise = example.get("primary_area_llm") or profile.get("expertise", "general")
         seniority = profile.get("seniority", "unknown")
         tone = (profile.get("tone", "neutral") or "neutral").lower()
 
@@ -136,9 +137,13 @@ class LlamaCppGenerator:
             content = example.get("abstract", "") or ""
             content_label = "Abstract"
 
+        # Format system prompt with primary_area if available
+        primary_area = example.get("primary_area_llm", "general")
+        system_prompt = self.config.system_prompt.format(primary_area=primary_area)
+
         # Use explicit JSON formatting for base models (like Qwen)
         # This is more compatible with non-chat models
-        prompt = f"""{self.config.system_prompt}
+        prompt = f"""{system_prompt}
 
 Title: {title}
 
@@ -292,13 +297,17 @@ class TogetherGenerator:
             content = (example.get("abstract", "") or "")[:3000]  # Keep old truncation
             content_label = "Abstract"
 
+        # Format system prompt with primary_area if available
+        primary_area = example.get("primary_area_llm", "general")
+        system_prompt = self.config.system_prompt.format(primary_area=primary_area)
+
         user_content = (
             f"Title: {title}\n\n"
             f"{content_label}:\n{content}\n\n"
             "Predict the review scores as JSON."
         )
         return [
-            {"role": "system", "content": self.config.system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 

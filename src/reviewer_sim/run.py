@@ -4,11 +4,24 @@ Pipeline runner for reviewer simulation.
 Reads input JSONL, generates reviews using configured provider, evaluates against
 human reviews, and writes results to output JSONL.
 
-Usage:
-    PYTHONPATH=src python -m reviewer_sim.run
+The system prompt is customized per-paper based on the primary_area_llm field.
+For best results, use an INPUT_JSONL enriched with primary_area_llm labels:
+
+    1. Export review subset (creates base JSONL):
+       python -m reviewer_sim.ingest.export_review_subset --db-path ... --out-path outputs/review_subset.jsonl
+
+    2. Enrich with primary_area_llm classifications (adds domain expertise):
+       export TOGETHER_API_KEY="your-key"
+       python -m reviewer_sim.ingest.enrich_primary_area \\
+         --in-path outputs/review_subset.jsonl \\
+         --out-path outputs/review_subset_enriched.jsonl
+
+    3. Run simulation with enriched data:
+       python -m reviewer_sim.run
 
 Environment variables:
     INPUT_JSONL: Input file path (default: outputs/review_subset.jsonl)
+                 Should ideally be enriched with primary_area_llm field
     OUTPUT_JSONL: Output file path (default: outputs/results.jsonl)
     MODEL_PROVIDER: mock, llamacpp, or together (default: mock)
     MODEL_PATH: Path to GGUF model (llamacpp) or Together model ID (together)
