@@ -23,6 +23,7 @@ The enhanced system prompt failed to reduce LLM upward bias. Despite explicit di
 |--------|-------|--------|--------|
 | Mean NMAE | 0.1662 | - | Acceptable |
 | Mean MAE | 0.7591 | - | Acceptable |
+| **Spearman Correlation** | **0.774** | - | **✓ Strong rank consistency** |
 | Decision Match | 44/120 (36.7%) | - | ⚠ Low |
 | Mean Rating | 7.08 | 5.4 | ❌ +1.68 too high |
 | Acceptance Rate (≥6) | 98.3% | 30% | ❌ +68.3% too high |
@@ -38,6 +39,20 @@ The enhanced system prompt failed to reduce LLM upward bias. Despite explicit di
 
 Actual distribution: `0 + 2 + 99 + 19 = 120 papers`
 
+### Per-Dimension Calibration
+
+The bias is not uniform across review dimensions. Some subdimensions match human ratings well, while others show significant drift:
+
+| Dimension | Scale | Human Mean | Model Mean | Difference | NMAE |
+|-----------|-------|------------|-----------|------------|------|
+| Rating | 1-10 | 5.434 | 7.075 | +1.641 (+30.2%) | 0.193 |
+| Empirical Novelty | 1-4 | 2.620 | 3.311 | +0.691 (+26.4%) | 0.243 |
+| Technical Novelty | 1-4 | 2.622 | 3.000 | +0.378 (+14.4%) | 0.156 |
+| Confidence | 1-5 | 3.611 | 3.933 | +0.322 (+8.9%) | 0.119 |
+| Correctness | 1-4 | 3.068 | 3.168 | +0.100 (+3.2%) | 0.118 |
+
+**Key insight:** The model's bias concentrates in the overall rating (0.193 NMAE) and empirical novelty (0.243 NMAE) dimensions, while correctness (0.118 NMAE) and confidence (0.119 NMAE) are nearly perfectly calibrated. This pattern suggests finetuning should prioritize recalibrating rating/novelty outputs, as the model already has accurate representations of correctness and reviewer confidence.
+
 ---
 
 ## Analysis
@@ -45,6 +60,8 @@ Actual distribution: `0 + 2 + 99 + 19 = 120 papers`
 ### The Problem is Mechanistic, Not Conceptual
 
 The system prompt explicitly specified the target distribution. The model ignored it completely, instead clustering 82.5% at ratings 6-7. This is not a reasoning failure—it's a systematic output bias from the RLHF training process.
+
+**Important:** Despite the bias toward high absolute ratings, the model maintains strong **rank consistency** (Spearman r = 0.774). Papers that humans rate as better ARE generally rated higher by the model. The problem is **calibration** (all ratings shifted ~1.7 points too high), not **ranking ability**. This is crucial for finetuning—the model already knows how to rank papers correctly; it just needs to learn the right output scale.
 
 Recent research reveals the root cause:
 - **Jahanparast et al. (2025):** LLMs have accurate opinion knowledge internally but the final unembedding layer suppresses it, creating a 50-59% gap between internal representations and outputs
