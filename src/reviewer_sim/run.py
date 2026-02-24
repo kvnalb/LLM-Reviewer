@@ -57,6 +57,10 @@ def main() -> None:
     print(f"Number of examples: {len(examples)}")
     print(f"Output path: {output_path}")
 
+    # Track failures for summary
+    failed_papers = []
+    success_count = 0
+
     with open(output_path, "w", encoding="utf-8") as f:
         for ex in tqdm(examples, desc="Simulating reviews"):
             try:
@@ -69,9 +73,21 @@ def main() -> None:
                     "metrics": metrics,
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                success_count += 1
             except Exception as exc:
                 paper_id = ex.get("paper_id")
-                print(f"Error processing paper_id={paper_id}: {type(exc).__name__}: {exc}")
+                error_msg = f"{type(exc).__name__}: {exc}"
+                print(f"\n[ERROR] paper_id={paper_id}: {error_msg}")
+                failed_papers.append({"paper_id": paper_id, "error": error_msg})
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print(f"SUMMARY: {success_count}/{len(examples)} papers processed successfully")
+    if failed_papers:
+        print(f"FAILURES: {len(failed_papers)} papers failed")
+        for failure in failed_papers:
+            print(f"  - {failure['paper_id']}: {failure['error']}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

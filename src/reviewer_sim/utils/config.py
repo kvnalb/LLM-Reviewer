@@ -113,11 +113,27 @@ def load_model_config() -> ModelConfig:
     n_gpu_layers = int(os.environ.get("N_GPU_LAYERS", "-1"))
     system_prompt = os.environ.get("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 
+    # Validate provider‑specific requirements early
     if provider == "llamacpp":
         if not model_path:
             raise ValueError("MODEL_PATH env var is required when MODEL_PROVIDER=llamacpp")
         if not Path(model_path).exists():
             raise FileNotFoundError(f"MODEL_PATH does not exist: {model_path}")
+
+    if provider == "together":
+        if not os.environ.get("TOGETHER_API_KEY"):
+            raise ValueError(
+                "TOGETHER_API_KEY environment variable is required when MODEL_PROVIDER=together"
+            )
+        if not model_path:
+            raise ValueError(
+                "MODEL_PATH env var is required when MODEL_PROVIDER=together "
+                "(e.g., 'mistralai/Mixtral-8x7B-Instruct-v0.1')"
+            )
+
+    # Validate temperature range
+    if not (0 <= temperature <= 2):
+        raise ValueError(f"TEMPERATURE must be between 0 and 2, got {temperature}")
 
     return ModelConfig(
         provider=provider,

@@ -73,18 +73,19 @@ run-llamacpp:
 	python -m reviewer_sim.run
 
 # Run with Together AI (requires TOGETHER_API_KEY and MODEL_PATH)
-# Default model is openai/gpt-oss-20b (serverless). Override with:
+# Default model is mistralai/Mixtral-8x7B-Instruct-v0.1. Override with:
 #   make run-together MODEL_PATH=deepseek-ai/deepseek-v3.1 OUTPUT_JSONL=outputs/results_deepseek.jsonl
 TOGETHER_OUTPUT_JSONL ?= outputs/results_together.jsonl
-TOGETHER_MODEL_PATH ?= openai/gpt-oss-20b
+TOGETHER_MODEL_PATH ?= mistralai/Mixtral-8x7B-Instruct-v0.1
+TOGETHER_INPUT_JSONL ?= outputs/review_subset.jsonl
 run-together:
 	@if [ -z "$(TOGETHER_API_KEY)" ]; then echo "ERROR: TOGETHER_API_KEY env var is required"; exit 1; fi
 	PYTHONPATH=$(PYTHONPATH) \
 	MODEL_PROVIDER=together \
-	MODEL_PATH=${MODEL_PATH:-${TOGETHER_MODEL_PATH}} \
+	MODEL_PATH=$(if $(MODEL_PATH),$(MODEL_PATH),$(TOGETHER_MODEL_PATH)) \
 	TOGETHER_API_KEY=$(TOGETHER_API_KEY) \
-	INPUT_JSONL=outputs/review_subset.jsonl \
-	OUTPUT_JSONL=$(TOGETHER_OUTPUT_JSONL) \
+	INPUT_JSONL=$(if $(INPUT_JSONL),$(INPUT_JSONL),$(TOGETHER_INPUT_JSONL)) \
+	OUTPUT_JSONL=$(if $(OUTPUT_JSONL),$(OUTPUT_JSONL),$(TOGETHER_OUTPUT_JSONL)) \
 	python -m reviewer_sim.run
 
 # Smoke test: run full pipeline on 5 papers

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Dict, Protocol
 
 import httpx
@@ -139,6 +140,9 @@ class LlamaCppGenerator:
 
         # Format system prompt with primary_area if available
         primary_area = example.get("primary_area_llm", "general")
+        # Validate primary_area is safe for format string
+        if not isinstance(primary_area, str) or not primary_area.replace("_", "").isalnum():
+            primary_area = "general"
         system_prompt = self.config.system_prompt.format(primary_area=primary_area)
 
         # Use explicit JSON formatting for base models (like Qwen)
@@ -271,17 +275,8 @@ class TogetherGenerator:
 
     def __init__(self, config: ModelConfig):
         self.config = config
+        # API key and model_path are already validated in load_model_config()
         self.api_key = os.environ.get("TOGETHER_API_KEY", "")
-        if not self.api_key:
-            raise ValueError(
-                "TOGETHER_API_KEY environment variable is required for "
-                "the 'together' provider."
-            )
-        if not config.model_path:
-            raise ValueError(
-                "MODEL_PATH must be set to a Together model ID "
-                "(e.g. 'meta-llama/Llama-3-8b-chat-hf') for the 'together' provider."
-            )
         self.model_id = config.model_path
         self.client = httpx.Client(timeout=60.0)
 
@@ -299,6 +294,9 @@ class TogetherGenerator:
 
         # Format system prompt with primary_area if available
         primary_area = example.get("primary_area_llm", "general")
+        # Validate primary_area is safe for format string
+        if not isinstance(primary_area, str) or not primary_area.replace("_", "").isalnum():
+            primary_area = "general"
         system_prompt = self.config.system_prompt.format(primary_area=primary_area)
 
         user_content = (
@@ -333,7 +331,6 @@ class TogetherGenerator:
                     TOGETHER_API_URL, json=payload, headers=headers,
                 )
                 if response.status_code == 429:
-                    import time
                     print(f"\n[429] Rate limited. Retrying in {2**attempt}s...")
                     time.sleep(2 ** attempt)
                     continue
@@ -358,7 +355,6 @@ class TogetherGenerator:
 
             except (httpx.HTTPError, KeyError, json.JSONDecodeError):
                 if attempt < max_retries - 1:
-                    import time
                     time.sleep(2 ** attempt)
                     continue
                 # Final failure — return empty scores
