@@ -1,4 +1,4 @@
-# LLM Reviewer Evaluation Report: 120-Paper Benchmark
+# Evaluation Report: Prompt Engineering Is Not Enough
 
 **Date:** February 23, 2026
 **Model:** Mixtral-8x7B-Instruct-v0.1
