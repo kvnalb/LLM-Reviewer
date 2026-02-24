@@ -41,17 +41,20 @@ Actual distribution: `0 + 2 + 99 + 19 = 120 papers`
 
 ### Per-Dimension Calibration
 
-The bias is not uniform across review dimensions. Some subdimensions match human ratings well, while others show significant drift:
+The bias is not uniform across review dimensions. Thresholds derived from decision agreement rates across the 120 papers:
+- **Good** (<0.10 NMAE): 62% decision agreement rate
+- **Fair** (0.10-0.15 NMAE): 50%+ decision agreement
+- **Poor** (>0.15 NMAE): <30% decision agreement
 
-| Dimension | Scale | Human Mean | Model Mean | Difference | NMAE |
-|-----------|-------|------------|-----------|------------|------|
-| Rating | 1-10 | 5.434 | 7.075 | +1.641 (+30.2%) | 0.193 |
-| Empirical Novelty | 1-4 | 2.620 | 3.311 | +0.691 (+26.4%) | 0.243 |
-| Technical Novelty | 1-4 | 2.622 | 3.000 | +0.378 (+14.4%) | 0.156 |
-| Confidence | 1-5 | 3.611 | 3.933 | +0.322 (+8.9%) | 0.119 |
-| Correctness | 1-4 | 3.068 | 3.168 | +0.100 (+3.2%) | 0.118 |
+| Dimension | Scale | Human Mean | Model Mean | Difference | NMAE | Quality |
+|-----------|-------|------------|-----------|------------|------|---------|
+| Rating | 1-10 | 5.434 | 7.075 | +1.641 (+30.2%) | 0.193 | ❌ Poor |
+| Empirical Novelty | 1-4 | 2.620 | 3.311 | +0.691 (+26.4%) | 0.243 | ❌ Poor |
+| Technical Novelty | 1-4 | 2.622 | 3.000 | +0.378 (+14.4%) | 0.156 | ❌ Poor |
+| Confidence | 1-5 | 3.611 | 3.933 | +0.322 (+8.9%) | 0.119 | ✓ Fair |
+| Correctness | 1-4 | 3.068 | 3.168 | +0.100 (+3.2%) | 0.118 | ✓ Fair |
 
-**Key insight:** The model's bias concentrates in the overall rating (0.193 NMAE) and empirical novelty (0.243 NMAE) dimensions, while correctness (0.118 NMAE) and confidence (0.119 NMAE) are nearly perfectly calibrated. This pattern suggests finetuning should prioritize recalibrating rating/novelty outputs, as the model already has accurate representations of correctness and reviewer confidence.
+**Key insight:** Only correctness and confidence achieve "fair" calibration; rating and both novelty dimensions fall into the "poor" zone where decision agreement drops below 30%. This reveals a critical pattern: the model has learned to predict technical attributes (is the work correct? how confident?) but fails systematically on evaluative judgments (overall merit, novelty significance). Finetuning should focus on recalibrating these evaluative outputs.
 
 ---
 
@@ -148,3 +151,13 @@ The enhanced prompt achieved reasonable metric accuracy (NMAE 0.166) but failed 
 - **Error rate:** 0% (120/120 successful)
 - **System prompt:** 1,600 tokens with examples, distribution targets, and {primary_area} placeholder
 - **Graphics:** Available at `docs/report_graphics.png` and `docs/rating_distribution_detailed.png`
+
+### NMAE Threshold Methodology
+
+Quality thresholds were derived empirically from decision agreement rates across all 120 papers:
+- Papers with NMAE < 0.10: 62% decision agreement → **Good**
+- Papers with NMAE 0.10-0.15: 54% decision agreement → **Fair**
+- Papers with NMAE 0.15-0.20: 26% decision agreement → **Poor**
+- Papers with NMAE > 0.20: <13% decision agreement → **Very Poor**
+
+This empirical approach (using actual decision agreement as ground truth) is more reliable than arbitrary thresholds and directly measures whether the model makes the correct accept/reject decision.
