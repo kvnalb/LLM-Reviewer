@@ -53,16 +53,21 @@ Downloaded and extracted full-text PDFs for all 120 papers (~10k tokens each, re
 | Decision agree | 42.5% | 43.1% |
 | Rating mean | 6.31 | 6.54 |
 
-Aggregate improvement is negligible. However, decomposing by outcome reveals an asymmetry:
+Negligible Change - Need to investigate further why this is the case.
 
-- **On rejected papers** (human mean 3.66): abstract-only bias = +1.94; full PDF bias = **+0.94** — halved, because the model can now read thin experimental sections and call out missing baselines/ablations.
-- **On accepted papers**: scores rose by a similar amount as the model rewards genuine strengths it can now read in detail.
+More importantly, the LLM is accepting papers at ~3x the rate of human reviewers (90% vs 35%). Will need to fix this issue before anything else.
 
-The two effects cancel at the aggregate level. The fundamental problem is not information access but calibration — the model needs a prior that ~65% of submitted papers should be rejected. Next step is prompt-level calibration intervention (explicit base-rate instruction, few-shot rejected examples).
+## 5. Recommended calibration interventions (to try this week)
+
+Explicit base-rate instruction. Tell the model: "ICLR 2023 accepted approximately 30% of submissions. Apply the same stringency."
+
+Threshold-aware prompting. Ask for an explicit accept/reject decision first, then ask for a numerical score consistent with that decision.
+
+Calibration examples in system prompt. Add 2–3 few-shot examples spanning the full rating range, including rejected papers (rating 3–4) with their rationales.
 
 ---
 
-## 5. Engineering
+## 6. Engineering
 
 - Full PDF extraction pipeline implemented (PyMuPDF, caching, failure logging)
 - Automated comparison reports: markdown, CSV, HTML, charts
