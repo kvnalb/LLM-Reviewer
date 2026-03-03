@@ -36,7 +36,6 @@ def main() -> None:
     dim_norm_errors: dict[str, list[float]] = {d: [] for d in SCORE_DIMENSIONS}
     all_nmae: list[float] = []
     all_rmse: list[float] = []
-    all_spearman: list[float] = []
     agree_count = 0
     agree_total = 0
 
@@ -55,10 +54,6 @@ def main() -> None:
         rmse = m.get("rmse")
         if rmse is not None:
             all_rmse.append(float(rmse))
-
-        sc = m.get("spearman_corr")
-        if sc is not None:
-            all_spearman.append(float(sc))
 
         da = m.get("decision_agree")
         if da is not None:
@@ -85,8 +80,6 @@ def main() -> None:
         print(f"NMAE (primary):        mean={mean(all_nmae):.3f}  median={median(all_nmae):.3f}")
     if all_rmse:
         print(f"RMSE:                  mean={mean(all_rmse):.3f}  median={median(all_rmse):.3f}")
-    if all_spearman:
-        print(f"Spearman correlation:  mean={mean(all_spearman):.3f}  median={median(all_spearman):.3f}")
     if agree_total:
         print(f"Decision agreement:    {agree_count / agree_total * 100:.1f}%  ({agree_count}/{agree_total})")
     else:

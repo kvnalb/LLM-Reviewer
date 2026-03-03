@@ -1,12 +1,15 @@
 """
 Evaluation metrics for comparing generated reviews to human reviews.
 
-Primary metrics are scale-aware:
-  - Normalized MAE (NMAE): error divided by each dimension's range
-  - RMSE: root mean square error
-  - Spearman correlation: rank correlation (robust to scale differences)
+Primary metrics are scale-aware (both human and LLM scores normalized to [0,1]):
+  - Normalized MAE (NMAE): mean absolute error on [0,1] scale across dimensions
+  - RMSE: root mean square error on [0,1] scale
   - Decision agreement: whether rating falls on same side of accept threshold
   - Per-dimension normalized error: shows which dimensions are harder
+
+Human scores are on native ICLR scales (rating 1–10, others 1–4 or 1–5).
+LLM scores are on the new 0–5 prompt scale.
+Both are normalized to [0,1] before any error computation.
 
 Text-based metrics (TF-IDF cosine, keyword Jaccard) are retained behind an
 optional flag for reference but are *not* the primary evaluation.
@@ -19,16 +22,21 @@ from reviewer_sim.ingest.export_review_subset import SCORE_COLUMNS
 
 SCORE_DIMENSIONS = SCORE_COLUMNS
 
-# Scale ranges for each dimension (used for normalization)
+# Human score ranges on native ICLR scales
 SCORE_RANGES = {
-    "rating": (1, 10),  # range = 9
-    "confidence": (1, 5),  # range = 4
-    "correctness": (1, 4),  # range = 3
-    "technical_novelty_and_significance": (1, 4),  # range = 3
-    "empirical_novelty_and_significance": (1, 4),  # range = 3
+    "rating": (1, 10),
+    "confidence": (1, 5),
+    "correctness": (1, 4),
+    "technical_novelty_and_significance": (1, 4),
+    "empirical_novelty_and_significance": (1, 4),
 }
 
-DEFAULT_ACCEPT_THRESHOLD = 6
+# LLM output range (new 0–5 prompt)
+LLM_SCORE_RANGE = (0.0, 5.0)
+
+# Accept thresholds on their respective scales
+HUMAN_ACCEPT_THRESHOLD = 6      # on 1–10 human scale
+DEFAULT_ACCEPT_THRESHOLD = 3.0  # on 0–5 LLM scale (≈ 6/10)
 
 
 def parse_numeric_rating(value: object) -> Optional[float]:
@@ -67,31 +75,22 @@ def _extract_human_score(review: Dict, dim: str) -> Optional[float]:
     return parse_numeric_rating(entry)
 
 
-def _normalized_error(abs_error: float, dim: str) -> Optional[float]:
-    """Normalize error by the range of the dimension.
-
-    NMAE (Normalized Mean Absolute Error) = error / range
-    This makes errors comparable across different scales.
-
-    For example:
-    - Error of 1 point on rating (range 9): 1/9 = 0.11
-    - Error of 1 point on confidence (range 4): 1/4 = 0.25
-    - Error of 1 point on correctness (range 3): 1/3 = 0.33
-    """
-    if dim not in SCORE_RANGES:
-        return None
-    min_val, max_val = SCORE_RANGES[dim]
-    range_val = max_val - min_val
-    return abs_error / range_val if range_val > 0 else None
+def _to_unit(value: float, lo: float, hi: float) -> float:
+    """Clamp and normalize *value* from [lo, hi] to [0, 1]."""
+    return max(0.0, min(1.0, (value - lo) / (hi - lo)))
 
 
 def evaluate(
     example: Dict,
     generated: Dict,
-    accept_threshold: int = DEFAULT_ACCEPT_THRESHOLD,
+    accept_threshold: float = DEFAULT_ACCEPT_THRESHOLD,
     include_text_metrics: bool = False,
 ) -> Dict:
     """Compare *generated* review scores against human scores in *example*.
+
+    Both human and LLM scores are normalized to [0, 1] before error
+    computation, so NMAE and RMSE are directly comparable across dimensions
+    regardless of their native scales.
 
     Parameters
     ----------
@@ -100,90 +99,57 @@ def evaluate(
         - New schema: ``example["reviews"][dim]`` with {"mean": ..., "values": [...], ...}
         - Old schema: ``example["review"][dim]`` with {"raw": ..., "value": ...}
     generated : dict
-        Output of a generator.  Scores are top-level keys.
-    accept_threshold : int
-        Rating >= this is "accept-side".
+        Output of a generator. Scores are top-level keys on the 0–5 LLM scale.
+    accept_threshold : float
+        LLM rating >= this is "accept-side" (default 3.0 on 0–5 scale).
     include_text_metrics : bool
         If True, also compute tfidf_cosine and keyword_jaccard (slow).
 
     Returns
     -------
-    dict with per-dimension errors, robust metrics (NMAE, RMSE, Spearman),
-    decision_agree, and optionally text metrics.
+    dict with per-dimension normalized errors, NMAE, RMSE, decision_agree,
+    and optionally text metrics.
     """
     # Handle both old ("review") and new ("reviews") schemas
     if "reviews" in example:
-        # New aggregated schema
         human_review = example.get("reviews", {}) or {}
     else:
-        # Old single-reviewer schema
         human_review = example.get("review", {}) or {}
 
     result: Dict = {}
-    abs_errors: list[float] = []
     normalized_errors: list[float] = []
     squared_errors: list[float] = []
 
-    # For correlation calculation
-    human_vals: list[float] = []
-    gen_vals: list[float] = []
+    l_lo, l_hi = LLM_SCORE_RANGE
 
     for dim in SCORE_DIMENSIONS:
         human_val = _extract_human_score(human_review, dim)
         gen_val = parse_numeric_rating(generated.get(dim))
 
         if human_val is not None and gen_val is not None:
-            err = abs(human_val - gen_val)
-            result[f"{dim}_abs_err"] = err
-            abs_errors.append(err)
+            h_lo, h_hi = SCORE_RANGES[dim]
+            norm_human = _to_unit(human_val, h_lo, h_hi)
+            norm_llm = _to_unit(gen_val, l_lo, l_hi)
+            norm_err = abs(norm_human - norm_llm)
 
-            # Normalized error (scale-aware)
-            norm_err = _normalized_error(err, dim)
-            if norm_err is not None:
-                result[f"{dim}_norm_err"] = norm_err
-                normalized_errors.append(norm_err)
-
-            # Squared error (for RMSE)
-            squared_errors.append(err ** 2)
-
-            # Track for correlation
-            human_vals.append(human_val)
-            gen_vals.append(gen_val)
+            result[f"{dim}_norm_err"] = norm_err
+            normalized_errors.append(norm_err)
+            squared_errors.append(norm_err ** 2)
         else:
-            result[f"{dim}_abs_err"] = None
             result[f"{dim}_norm_err"] = None
 
-    # Primary metric: Normalized MAE (scale-aware)
+    # Primary metric: NMAE on [0,1] scale
     result["nmae"] = sum(normalized_errors) / len(normalized_errors) if normalized_errors else None
 
-    # Secondary metric: RMSE (penalizes larger errors)
+    # Secondary metric: RMSE on [0,1] scale
     result["rmse"] = (sum(squared_errors) / len(squared_errors)) ** 0.5 if squared_errors else None
 
-    # Legacy metric: MAE (kept for backward compatibility, but NMAE is preferred)
-    result["mae"] = sum(abs_errors) / len(abs_errors) if abs_errors else None
-
-    # Correlation: Spearman rank correlation (robust to scale)
-    if len(human_vals) >= 3:  # Need at least 3 points for correlation
-        try:
-            from scipy.stats import spearmanr
-            import math
-            corr, pval = spearmanr(human_vals, gen_vals)
-            result["spearman_corr"] = float(corr) if not math.isnan(corr) else None
-            result["spearman_pval"] = float(pval) if not math.isnan(pval) else None
-        except (ImportError, Exception):
-            # Fallback if scipy not available
-            result["spearman_corr"] = None
-            result["spearman_pval"] = None
-    else:
-        result["spearman_corr"] = None
-        result["spearman_pval"] = None
-
-    # Decision agreement (accept vs reject)
+    # Decision agreement: human threshold on 1–10 scale, LLM threshold on 0–5 scale
     human_rating = _extract_human_score(human_review, "rating")
     gen_rating = parse_numeric_rating(generated.get("rating"))
     if human_rating is not None and gen_rating is not None:
         result["decision_agree"] = (
-            (human_rating >= accept_threshold) == (gen_rating >= accept_threshold)
+            (human_rating >= HUMAN_ACCEPT_THRESHOLD) == (gen_rating >= accept_threshold)
         )
     else:
         result["decision_agree"] = None
