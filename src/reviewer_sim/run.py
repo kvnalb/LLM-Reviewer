@@ -4,11 +4,24 @@ Pipeline runner for reviewer simulation.
 Reads input JSONL, generates reviews using configured provider, evaluates against
 human reviews, and writes results to output JSONL.
 
-Usage:
-    PYTHONPATH=src python -m reviewer_sim.run
+The system prompt is customized per-paper based on the primary_area_llm field.
+For best results, use an INPUT_JSONL enriched with primary_area_llm labels:
+
+    1. Export review subset (creates base JSONL):
+       python -m reviewer_sim.ingest.export_review_subset --db-path ... --out-path outputs/review_subset.jsonl
+
+    2. Enrich with primary_area_llm classifications (adds domain expertise):
+       export TOGETHER_API_KEY="your-key"
+       python -m reviewer_sim.ingest.enrich_primary_area \\
+         --in-path outputs/review_subset.jsonl \\
+         --out-path outputs/review_subset_enriched.jsonl
+
+    3. Run simulation with enriched data:
+       python -m reviewer_sim.run
 
 Environment variables:
     INPUT_JSONL: Input file path (default: outputs/review_subset.jsonl)
+                 Should ideally be enriched with primary_area_llm field
     OUTPUT_JSONL: Output file path (default: outputs/results.jsonl)
     MODEL_PROVIDER: mock, llamacpp, or together (default: mock)
     MODEL_PATH: Path to GGUF model (llamacpp) or Together model ID (together)
@@ -44,6 +57,10 @@ def main() -> None:
     print(f"Number of examples: {len(examples)}")
     print(f"Output path: {output_path}")
 
+    # Track failures for summary
+    failed_papers = []
+    success_count = 0
+
     with open(output_path, "w", encoding="utf-8") as f:
         for ex in tqdm(examples, desc="Simulating reviews"):
             try:
@@ -56,9 +73,21 @@ def main() -> None:
                     "metrics": metrics,
                 }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                success_count += 1
             except Exception as exc:
                 paper_id = ex.get("paper_id")
-                print(f"Error processing paper_id={paper_id}: {type(exc).__name__}: {exc}")
+                error_msg = f"{type(exc).__name__}: {exc}"
+                print(f"\n[ERROR] paper_id={paper_id}: {error_msg}")
+                failed_papers.append({"paper_id": paper_id, "error": error_msg})
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print(f"SUMMARY: {success_count}/{len(examples)} papers processed successfully")
+    if failed_papers:
+        print(f"FAILURES: {len(failed_papers)} papers failed")
+        for failure in failed_papers:
+            print(f"  - {failure['paper_id']}: {failure['error']}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

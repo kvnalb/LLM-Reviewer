@@ -1,9 +1,10 @@
-# Experiment: 8-Model Abstract-Only Baseline
+# Experiment: 8-Model Abstract-Only Baseline + GPT-OSS-20B Full-PDF Comparison
 
-**Date:** 2026-02-16
+**Date:** 2026-02-16 / 2026-02-17
 **Branch:** `exploratory`
 **Dataset:** n=120 ICLR 2023 papers, stratified by decision and rating
-**Input:** Title + abstract (up to 3 000 chars)
+**Input (baseline):** Title + abstract (up to 3 000 chars)
+**Input (PDF run):** Full paper text via PyMuPDF, references stripped, ~10k tokens
 **Ground truth:** Mean score across all human reviewers per paper
 
 ---
@@ -45,6 +46,42 @@ Sorted by NMAE (Normalized MAE, lower is better). NMAE normalises each score dim
 
 ---
 
+## PDF Experiment: GPT-OSS-20B Full-Paper vs Abstract-Only
+
+After confirming the baseline, GPT-OSS-20B was re-run on the same 120 papers using full PDF text (~10k tokens, references removed) to test whether information access explains the decision agreement failure.
+
+### Aggregate results
+
+| | Abstract-only | Full PDF | Δ |
+|--|--|--|--|
+| NMAE | 0.167 | **0.164** | −0.003 |
+| Spearman | 0.770 | **0.787** | +0.017 |
+| Decision agree | 42.5% (51/120) | 43.1% (50/116) | negligible |
+| Lenient errors | 66 | 65 | −1 |
+| Rating mean | 6.31 | 6.54 | **+0.23 ↑** |
+| Rating std | 0.94 | **1.07** | +0.13 |
+
+Decision agreement and NMAE are essentially unchanged. Notably, the mean rating went *up*, not down.
+
+### What actually changes
+
+Full paper content has two opposing effects that cancel at the aggregate level:
+
+**Downward pressure on rejected papers:** The model now reads the experimental sections and correctly identifies thin evidence. On a targeted sample of 5 rejected papers (human mean 3.66):
+- Abstract-only mean: 5.60 (+1.94 above human)
+- Full PDF mean: 4.60 (+0.94 above human) — bias halved
+- Rationales become specific: *"Experimental evidence is limited to CIFAR-10, with no comprehensive comparison"*, *"The paper does not present quantitative results"*
+
+**Upward pressure on accepted papers:** The model also reads the strengths in good papers and rewards them. 7-ratings rose from 19→27, 8-ratings from 18→27.
+
+These effects cancel: 65 rejected papers are still rated ≥6.
+
+### Conclusion
+
+Information access is a real factor for the reject class but is offset by symmetric inflation of accepted papers. The dominant problem remains calibration — the model has no learned prior toward assigning 3s and 4s regardless of what it reads.
+
+---
+
 ## Key Finding: Score Compression Bias
 
 Decision agreement is uniformly low (35–43%) across all models, including the largest and most capable ones. The primary cause is **score compression** — models systematically output ratings in a narrow band well above the human distribution.
@@ -64,17 +101,17 @@ Decision agreement is uniformly low (35–43%) across all models, including the 
 
 **Every single disagreement is in the lenient direction**: models say "accept" when humans say "reject". No model erred in the strict direction.
 
-### Why compression, not information access
+### Why compression is the primary cause (with a secondary information component)
 
-A natural hypothesis is that models fail because they only see the abstract (not the full paper). However, this does not explain the pattern:
+The PDF experiment confirms that information access is a real but secondary factor:
 
-1. **Rationales are accurate about weaknesses.** Sample from DeepSeek-V3.1 (human: 4.0, model: 7): *"comparisons to broader baselines and deeper analysis of limitations would strengthen the claims"* — yet still gives 7. The model understands the paper is weak but doesn't convert that understanding into a low score.
+- **Full paper content helps with the reject class** — bias on rejected papers drops from +1.94 to +0.94 once the model can read thin experimental sections and missing baselines.
+- **But it raises scores on accepted papers by a similar amount** — the model rewards genuine strengths when it can read methods and results in detail.
+- **Net effect on decision agreement: zero.** The two effects cancel.
 
-2. **The failure is symmetric.** A model with full-paper access would also need to be calibrated to assign 4s and 5s — a reluctance that is independent of information. Models trained on internet text have a strong prior toward positive, constructive language.
+The core issue is a **calibration prior**: models have a strong learned tendency toward positive, constructive responses. This is visible in the baseline rationales — DeepSeek-V3.1 correctly notes *"comparisons to broader baselines would strengthen the claims"* for a paper rated 4.0 by humans, then gives it 7. The hedging language is present; the score is not adjusted. Llama-3.3-70B (std=0.43) assigns 8 to essentially everything regardless of content — this is purely a decoder behavior, not an evidence gap.
 
-3. **Scale compression is consistent regardless of content.** Llama-3.3-70B (std=0.43) essentially assigns 8 to everything regardless of what it reads. This is a decoder behavior, not an evidence gap.
-
-The **information gap does matter at the margin** — full paper content gives access to experimental sections, ablation studies, and related work that can reveal fatal flaws — but the compression bias will persist independently and needs its own fix.
+The information gap matters for the reject class, but fixing it requires calibration intervention regardless of input length.
 
 ### Why Spearman is high but DecAgr is low
 
@@ -98,14 +135,9 @@ Concretely: a model that gives every paper exactly 7 would have perfect Spearman
 
 ## Implications
 
-### For full-paper PDF experiment
+### On full-paper PDF input
 
-Full paper access will help with:
-- Identifying unsupported or cherry-picked empirical claims
-- Evaluating ablations and comparison to baselines
-- Assessing correctness of proofs and derivations
-
-But **PDF access alone will not close the decision agreement gap** unless score calibration is also addressed.
+Full paper input is confirmed to reduce upward bias on the reject class (bias halved from +1.94 to +0.94 on rejected papers), but does not improve aggregate decision agreement because scores on accepted papers rise by a similar margin. **PDF input alone does not close the decision agreement gap.** Calibration intervention is required in addition.
 
 ### Recommended calibration interventions
 
@@ -123,4 +155,6 @@ But **PDF access alone will not close the decision agreement gap** unless score 
 
 - **Qwen3-235B bug:** model emitted `rationale` as an unquoted string, causing JSON parse failure and 118/120 null ratings. Fixed by adding a regex field-extraction fallback in `providers.py`; results reprocessed in-place.
 - **DeepSeek-R1:** `<think>` block stripping added to parser; `max_tokens=4000` required. Run deferred pending cost approval.
-- **Coverage:** All 7 evaluated models achieved ≥98% valid parse rate after fixes.
+- **Coverage:** All 7 evaluated models achieved ≥98% valid parse rate after fixes (GPT-OSS-20B PDF run: 116/120).
+- **pdf_extractor.py dispatch bug:** `extract_paper()` only matched `extraction_mode == "sections"`, causing `sections_optimized` (the default) to silently fall through to `fulltext`. Fixed; the PDF run used `fulltext` mode intentionally.
+- **Section detection limitation:** `_detect_sections` only matches 5 hardcoded headers. Real ML papers use non-standard section names ("Proposed Method", "Our Approach"), so `sections_optimized` mode in practice captures only intro/conclusion for most papers. `fulltext` mode is recommended until section detection is improved.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Dict, Protocol
 
 import httpx
@@ -31,7 +32,8 @@ class MockGenerator:
         abstract = example.get("abstract", "") or ""
 
         profile = example.get("reviewer_profile", {}) or {}
-        expertise = profile.get("expertise", "general")
+        # Use primary_area_llm if available, otherwise fall back to profile expertise
+        expertise = example.get("primary_area_llm") or profile.get("expertise", "general")
         seniority = profile.get("seniority", "unknown")
         tone = (profile.get("tone", "neutral") or "neutral").lower()
 
@@ -136,9 +138,16 @@ class LlamaCppGenerator:
             content = example.get("abstract", "") or ""
             content_label = "Abstract"
 
+        # Format system prompt with primary_area if available
+        primary_area = example.get("primary_area_llm", "general")
+        # Validate primary_area is safe for format string
+        if not isinstance(primary_area, str) or not primary_area.replace("_", "").isalnum():
+            primary_area = "general"
+        system_prompt = self.config.system_prompt.format(primary_area=primary_area)
+
         # Use explicit JSON formatting for base models (like Qwen)
         # This is more compatible with non-chat models
-        prompt = f"""{self.config.system_prompt}
+        prompt = f"""{system_prompt}
 
 Title: {title}
 
@@ -266,17 +275,8 @@ class TogetherGenerator:
 
     def __init__(self, config: ModelConfig):
         self.config = config
+        # API key and model_path are already validated in load_model_config()
         self.api_key = os.environ.get("TOGETHER_API_KEY", "")
-        if not self.api_key:
-            raise ValueError(
-                "TOGETHER_API_KEY environment variable is required for "
-                "the 'together' provider."
-            )
-        if not config.model_path:
-            raise ValueError(
-                "MODEL_PATH must be set to a Together model ID "
-                "(e.g. 'meta-llama/Llama-3-8b-chat-hf') for the 'together' provider."
-            )
         self.model_id = config.model_path
         self.client = httpx.Client(timeout=60.0)
 
@@ -292,13 +292,20 @@ class TogetherGenerator:
             content = (example.get("abstract", "") or "")[:3000]  # Keep old truncation
             content_label = "Abstract"
 
+        # Format system prompt with primary_area if available
+        primary_area = example.get("primary_area_llm", "general")
+        # Validate primary_area is safe for format string
+        if not isinstance(primary_area, str) or not primary_area.replace("_", "").isalnum():
+            primary_area = "general"
+        system_prompt = self.config.system_prompt.format(primary_area=primary_area)
+
         user_content = (
             f"Title: {title}\n\n"
             f"{content_label}:\n{content}\n\n"
             "Predict the review scores as JSON."
         )
         return [
-            {"role": "system", "content": self.config.system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 
@@ -324,7 +331,6 @@ class TogetherGenerator:
                     TOGETHER_API_URL, json=payload, headers=headers,
                 )
                 if response.status_code == 429:
-                    import time
                     print(f"\n[429] Rate limited. Retrying in {2**attempt}s...")
                     time.sleep(2 ** attempt)
                     continue
@@ -349,7 +355,6 @@ class TogetherGenerator:
 
             except (httpx.HTTPError, KeyError, json.JSONDecodeError):
                 if attempt < max_retries - 1:
-                    import time
                     time.sleep(2 ** attempt)
                     continue
                 # Final failure — return empty scores
